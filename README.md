@@ -1,4 +1,4 @@
-# Cloudflare Worker - Wordpress External cron
+# Cloudflare Worker for Wordpress wp-cron.php
 
 A simple serverless script to offload wp-cron.php to your free Cloudflare account. Because every request counts ;)
 
@@ -46,9 +46,8 @@ Cloudflare adds an extra layer of security before requests hit the server. And g
 Disable WP-Cron in WordPress
 Add this to wp-config.php:
 
-```define('DISABLE_WP_CRON', true);
-
-```
+``define('DISABLE_WP_CRON', true);``
 
 Set Up a Cloudflare Worker
+
 Use JavaScript to make scheduled requests to wp-cron.php at specific intervals.
