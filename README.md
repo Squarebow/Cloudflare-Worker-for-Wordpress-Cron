@@ -13,33 +13,23 @@ Moving WordPress system cron jobs (WP-Cron) from the hosting server to a Cloudfl
 
 ### 1. Reduced Server Load
 
-WP-Cron runs on every page visit, triggering scheduled tasks, which can cause high CPU and memory usage, especially on high-traffic websites.
-
-Moving WP-Cron to a Cloudflare Worker ensures tasks run independently, freeing up server resources.
+WP-Cron runs on every page visit, triggering scheduled tasks, which can cause high CPU and memory usage, especially on high-traffic websites. Moving WP-Cron to a Cloudflare Worker ensures tasks run independently, freeing up server resources.
 
 ### 2. More Reliable Execution
 
-WP-Cron relies on visitor traffic, meaning scheduled tasks may be delayed if there are no visits.
-
-Cloudflare Workers can trigger cron jobs at precise intervals, ensuring reliability.
+WP-Cron relies on visitor traffic, meaning scheduled tasks may be delayed if there are no visits. Cloudflare Workers can trigger cron jobs at precise intervals, ensuring reliability.
 
 ### 3. Faster Page Load Times
 
-Since WP-Cron runs in the background when users visit a page, it can slow down load times.
-
-Offloading it to Cloudflare means WordPress requests are lighter, improving performance.
+Since WP-Cron runs in the background when users visit a page, it can slow down load times. Offloading it to Cloudflare means WordPress requests are lighter, improving performance.
 
 ### 4. Scalability
 
-Hosting providers may limit CPU usage for frequent cron jobs, impacting large sites.
-
-Cloudflare’s edge network scales easily without overloading the origin server.
+Hosting providers may limit CPU usage for frequent cron jobs, impacting large sites. Cloudflare’s edge network scales easily without overloading the origin server.
 
 ### 5. Improved Security
 
-Running WP-Cron externally reduces potential attack vectors, such as DDoS attacks exploiting heavy cron executions.
-
-Cloudflare adds an extra layer of security before requests hit the server. And gives users generous 100.000 requests/day - for free. [More](https://developers.cloudflare.com/workers/platform/limits/)
+Running WP-Cron externally reduces potential attack vectors, such as DDoS attacks exploiting heavy cron executions. Cloudflare adds an extra layer of security before requests hit the server. And gives users generous 100.000 requests/day - for free. [More](https://developers.cloudflare.com/workers/platform/limits/)
 
 ### How to Implement It
 
