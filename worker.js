@@ -1,46 +1,62 @@
-/* JS Worker for wp-cron.php */
+/* 
+  Cloudflare Worker - MULTI-Secure
+  --------------------------------
+  Triggers wp-cron.php for multiple WordPress sites, each with a separate secret key
+*/
 
 export default {
-  async fetch(req, env, ctx) {
-    const url = new URL(req.url);
-    
-    // If the request is for wp-cron.php, trigger the cron job
-    if (url.pathname === "/wp-cron.php") {
-      return handleScheduled(env.DEFAULT_DOMAIN, env.WORKER_SECRET_KEY);
-    }
-
-    // Allow all other requests to pass through normally
-    return fetch(req);
-  },
-
   async scheduled(event, env, ctx) {
-    console.log(`Cron triggered at: ${new Date(event.scheduledTime).toISOString()}`);
-    ctx.waitUntil(handleScheduled(env.DEFAULT_DOMAIN, env.WORKER_SECRET_KEY));
+    console.log(`Multi-site secure cron triggered at: ${new Date(event.scheduledTime).toISOString()}`);
+    ctx.waitUntil(runMultiCron(env));
   },
 };
 
-async function handleScheduled(domain, secretKey) {
-  const url = `https://${domain}/wp-cron.php?doing_wp_cron`;
+// Main runner
+async function runMultiCron(env) {
+  if (!env.MULTISITE_SITES) {
+    console.error("MULTISITE_SITES variable is missing. Provide a JSON array of {domain, key} objects.");
+    return;
+  }
 
+  let sites;
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "User-Agent": "Cloudflare-Worker-Cron",
-        "X-Worker-Auth": secretKey,
-        "Cache-Control": "no-cache"
-      },
-      cf: { cacheTtl: 0 }
-    });
+    sites = JSON.parse(env.MULTISITE_SITES);
+    if (!Array.isArray(sites)) throw new Error("MULTISITE_SITES must be an array of objects.");
+  } catch (err) {
+    console.error("MULTISITE_SITES parse error:", err);
+    return;
+  }
 
-    if (!response.ok) {
-      console.error(`Failed to trigger WP-Cron: ${response.status} ${response.statusText}`);
-      return new Response("Cron failed", { status: 500 });
+  for (const site of sites) {
+    if (!site.domain || !site.key) {
+      console.warn("Skipping invalid site entry:", site);
+      continue;
     }
 
-    return new Response("Cron executed successfully", { status: 200 });
-  } catch (error) {
-    console.error("Error triggering WP-Cron:", error);
-    return new Response("Error triggering WP-Cron", { status: 500 });
+    const trimmed = site.domain.replace(/\/$/, "");
+    const url = `${trimmed}/wp-cron.php?doing_wp_cron`;
+
+    try {
+      console.log(`Triggering WP cron for ${url}`);
+
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: {
+          "User-Agent": "Cloudflare-Worker-Multi-Secure-Cron",
+          "X-Worker-Auth": site.key,
+          "Cache-Control": "no-cache"
+        },
+        cf: { cacheTtl: 0 }
+      });
+
+      if (!resp.ok) {
+        const body = await safeText(resp);
+        console.error(`Failed for ${url}: ${resp.status} ${resp.statusText} - ${body}`);
+      } else {
+        console.log(`Success for ${url}: ${resp.status}`);
+      }
+    } catch (err) {
+      console.error(`Network or runtime error calling ${url}:`, err);
+    }
   }
 }
