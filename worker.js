@@ -5,15 +5,8 @@
   Each site has its own secret key sent via the X-Worker-Auth header,
   so every site can verify that the request came from this Worker.
 
-  Environment variable required:
-    WP_CRON_SITES — a JSON array of { "url": "...", "key": "..." } objects.
+  See https://github.com/Squarebow/Cloudflare-Worker-for-Wordpress-Cron/tree/multi-site for detailed instructions
 
-  Example:
-    [
-      { "url": "https://site1.com",      "key": "secret-key-1" },
-      { "url": "https://site2.net",      "key": "secret-key-2" },
-      { "url": "https://blog.site3.org", "key": "secret-key-3" }
-    ]
 */
 
 // How long (in milliseconds) to wait for each WordPress site before giving up.
