@@ -1,5 +1,5 @@
 # Cloudflare Worker for WordPress Cron
-### Multi-Site Version
+### Multi-Site Version (switch branch to main for single-site version)
 
 Trigger `wp-cron.php` for any number of independent WordPress sites from a single Cloudflare Worker, with a separate secret key per site. Switch between main and multi-site branch for the version that suits you.
 
@@ -15,6 +15,7 @@ Trigger `wp-cron.php` for any number of independent WordPress sites from a singl
 - [Overview](#overview)
 - [Single-Site vs Multi-Site: which version do I need?](#single-site-vs-multi-site-which-version-do-i-need)
 - [Why offload WordPress cron to a Worker?](#why-offload-wordpress-cron-to-a-worker)
+- [Performance and server load](#performance-and-server-load)
 - [How it works](#how-it-works)
 - [Setup](#setup)
 - [Securing wp-cron.php on your server](#securing-wp-cronphp-on-your-server)
@@ -51,6 +52,46 @@ This Worker does exactly that. It runs on Cloudflare's network on a timed schedu
 - **Performance.** Every WP-Cron check adds overhead to real page loads. Disabling it removes that overhead.
 - **No server cron needed.** You don't need SSH access or the ability to edit the server's crontab.
 - **Centralised.** One Worker handles all your sites. You manage the schedule in one place.
+
+---
+
+## Performance and server load
+
+Offloading WordPress cron to a Cloudflare Worker eliminates an entire category of server overhead that most site owners are not aware of.
+
+### How WP-Cron works by default
+
+Every page request to a WordPress site triggers a call to `spawn_cron()`, which fires a loopback HTTP request — the server calling itself — to run `wp-cron.php`. That self-request is a full WordPress boot: loading all plugins, connecting to the database, parsing configuration. It typically costs **50–200ms of CPU time and 20–60MB of RAM** per invocation. Under traffic spikes, dozens of these can stack up simultaneously, each competing for a PHP-FPM slot and a database connection.
+
+### What setting `DISABLE_WP_CRON = true` removes
+
+| What disappears | What it was costing |
+|---|---|
+| `spawn_cron()` check on every page load | PHP overhead on every single request |
+| Loopback HTTP request to self | Full TCP connection + complete WordPress bootstrap per trigger |
+| Cron pile-ups under traffic spikes | Multiple overlapping PHP processes competing for DB connections |
+
+### Requests saved by traffic level
+
+| Daily visits | Loopback attempts eliminated | Actual cron executions |
+|---|---|---|
+| 500 | ~500 per day | ~1,440 clean Worker requests |
+| 5,000 | ~5,000 per day | ~1,440 clean Worker requests |
+| 50,000 | ~50,000 per day | ~1,440 clean Worker requests |
+
+Regardless of traffic, WordPress cron only needs to run approximately once per minute. The Worker does exactly that — 1,440 times per day — replacing an unpredictable number of server self-requests with a fixed, predictable load entirely separate from visitor traffic.
+
+### Where the gain is most felt
+
+**Low-traffic sites** gain reliability above all else. WP-Cron may never fire at all if no visitors arrive during off-hours. The Worker runs on a fixed schedule regardless.
+
+**Medium-traffic sites** (1k–20k visits/day) see a measurable reduction in PHP-FPM worker consumption, which on shared or entry-level VPS hosting often means staying within resource limits instead of hitting them.
+
+**High-traffic sites** benefit most from eliminating loopback storms. Under sudden traffic spikes, the default WP-Cron behaviour can spawn large numbers of concurrent self-requests. Disabling it removes that risk entirely.
+
+### In short
+
+You replace up to tens of thousands of daily server self-requests — each a full PHP and WordPress bootstrap — with exactly **1,440 lightweight requests per day** from Cloudflare's network, cleanly separated from real visitor traffic and costing your server nothing to initiate.
 
 ---
 
