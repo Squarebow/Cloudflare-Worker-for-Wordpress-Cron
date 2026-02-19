@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the Single-Site version of this Worker are recorded here.
+All notable changes to the Multi-Site version of this Worker are recorded here.
 
 ---
 
@@ -8,38 +8,43 @@ All notable changes to the Single-Site version of this Worker are recorded here.
 
 ### Breaking changes
 
-- **Renamed environment variable** `DEFAULT_DOMAIN` → `WP_CRON_URL`.  
-  The value also changes: previously it held only the hostname (e.g. `example.com`); it must now be the full base URL including the scheme (e.g. `https://example.com`). Update both the variable name and value in your Worker's **Settings → Variables and Secrets**.
+- **Renamed environment variable** from `MULTISITE_SITES` to `WP_CRON_SITES`.  
+  Update the variable name in your Worker's Settings → Variables and Secrets.
 
-- **Renamed environment variable** `WORKER_SECRET_KEY` → `WP_CRON_KEY`.  
-  The value is unchanged — update only the name. This aligns the naming convention with the Multi-Site version (`WP_CRON_SITES`), making it easier to manage both Workers in the same Cloudflare account.
+- **Renamed JSON field** from `domain` to `url` inside the `WP_CRON_SITES` array.  
+  Update every entry in your JSON from `{ "domain": "...", "key": "..." }` to `{ "url": "...", "key": "..." }`.  
+  The values themselves do not change — only the field name.
 
 ### Bug fixes
 
-- **Missing variable guard.** If `WP_CRON_URL` or `WP_CRON_KEY` were not set, the Worker would crash with an unhelpful runtime error. The Worker now checks for both variables before attempting a fetch and returns a clear error message explaining which variable is missing.
+- **Fixed critical runtime error:** `safeText()` was called in `worker.js` on non-OK HTTP responses but was never defined in the file (it only appeared in the README code block). Any HTTP error from a WordPress site would have caused a `ReferenceError: safeText is not defined` crash. The function is now correctly included in `worker.js`.
 
 ### Improvements
 
-- **Request timeout.** The fetch to `wp-cron.php` now has a 10-second timeout via `AbortController`. A slow or unresponsive WordPress server will no longer hang the Worker indefinitely. Timeouts are logged and return HTTP 504.
+- **Parallel execution.** Sites are now triggered in parallel using `Promise.allSettled` instead of one after another. This means the total run time is roughly equal to the slowest individual site, not the sum of all sites.
 
-- **Confirmation message updated.** The browser confirmation message returned by the `fetch()` handler is now:  
-  `Cloudflare Worker for WordPress works. Yay!`  
-  Previously: `Cron executed successfully. Yay!`
+- **Request timeout.** Each site fetch now has a 10-second timeout via `AbortController`. A slow or unresponsive site will no longer hang the Worker indefinitely.
 
-- **Error details in logs.** When WordPress returns a non-OK HTTP status, the Worker now reads and logs up to 500 characters of the response body, making it easier to diagnose server-side errors without leaving the Cloudflare dashboard.
+- **URL validation.** The Worker now checks each entry before attempting a fetch and logs a clear error message if the `url` or `key` field is missing or malformed.
 
-- **Consistent URL handling.** `WP_CRON_URL` now accepts the full site URL (e.g. `https://example.com`). Trailing slashes are stripped automatically, so both `https://example.com` and `https://example.com/` work correctly.
+- **Improved log output.** Log messages are more descriptive. A summary line at the end of each run shows how many sites succeeded and how many failed.
 
-- **Code comments.** All functions are fully documented with inline comments explaining what each section does and why.
+- **Response body capped in error logs.** When a site returns an error, the Worker reads up to 500 characters of the response body for debugging, instead of attempting to read the full (potentially large) error page.
+
+### Naming
+
+- The project is now referred to as the **Multi-Site** version (previously "Multi-Secure" or "multi domain"). The companion script is the **Single-Site** version. "Site" is the appropriate term because each entry represents a full WordPress installation identified by its base URL — not just a domain name.
 
 ### README
 
 - Rewrote all sections for clarity. Plain English throughout, with no assumed knowledge of Cloudflare internals.
 - Added a **Single-Site vs Multi-Site** comparison table.
-- **Step 3 (Worker Route):** Now fully explains what route pattern to enter (`your-site.com/wp-cron.php*`) and why the `*` wildcard is needed.
-- **Step 4 (WAF skip rule):** Now includes the actual WAF expression that was missing entirely from the original README. Marked as optional for users not using Cloudflare WAF.
-- **Step 5 (Cron Trigger):** Now shows the actual cron expression (`* * * * *`).
-- **Step 6 (wp-config.php):** Fixed broken code block (missing closing fence in original).
-- **Step 7 (Testing):** Now explains exactly what the browser confirmation message means, how it is generated by the Worker, and what to check if you see your normal site instead.
-- **Securing wp-cron.php:** Updated Apache configuration from the deprecated Apache 2.2 `Order Deny,Allow` syntax to the current Apache 2.4 `Require` directive.
-- Added a Notes and limitations section.
+- Added an explanation of why offloading WP-Cron to a Worker is beneficial.
+- Clarified that "Multi-Site" refers to multiple independent WordPress installations and is unrelated to the WordPress Multisite (network) feature.
+- Corrected the "How it works" URL template, which previously showed `https://{domain}/wp-cron.php` — implying the field held only a domain name, when it actually holds a full URL.
+- Updated Apache configuration from the deprecated Apache 2.2 `Order Deny,Allow` syntax to the current Apache 2.4 `Require` directive.
+- Recommended using **Secret** type (not Plain text) for `WP_CRON_SITES`, since it contains authentication keys.
+- Added a Testing section covering Wrangler local testing and the Cloudflare Past Events log.
+- Expanded the Troubleshooting table with more specific symptoms, causes, and fixes.
+- Added a Notes and limitations section covering UTC timing, the 3-trigger limit, parallel execution behaviour, and log retention.
+- Removed the embedded copy of `worker.js` from the README to avoid the file getting out of sync with the actual `worker.js`.
