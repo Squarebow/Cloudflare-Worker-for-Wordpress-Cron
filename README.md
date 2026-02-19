@@ -1,7 +1,7 @@
 # Cloudflare Worker for WordPress Cron
 ### Multi-Site Version
 
-Trigger `wp-cron.php` for any number of independent WordPress sites from a single Cloudflare Worker, with a separate secret key per site.
+Trigger `wp-cron.php` for any number of independent WordPress sites from a single Cloudflare Worker, with a separate secret key per site. Switch between main and multi-site branch for the version that suits you.
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
