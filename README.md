@@ -1,7 +1,7 @@
 # Cloudflare Worker for WordPress Cron
 ### Single-Site Version
 
-Trigger `wp-cron.php` for one WordPress site reliably from Cloudflare's network, replacing WordPress's built-in scheduler.
+Trigger `wp-cron.php` for one WordPress site reliably from Cloudflare's network, replacing WordPress's built-in scheduler. Switch between main and multi-site branch for the version that suits you.
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
