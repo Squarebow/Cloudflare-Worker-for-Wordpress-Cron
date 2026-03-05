@@ -1,6 +1,38 @@
 # Changelog
 
-All notable changes to the Multi-Site version of this Worker are recorded here.
+All notable changes to this project are recorded here.
+
+---
+
+## [3.0.0] — 2026-03-05
+
+### Consolidation
+
+This release merges the previously separate single-site and multi-site branches into a single, unified codebase on `main`. There is now one Worker, one README, and one CHANGELOG.
+
+**Why this was done:**
+
+The two branches had diverged into a maintenance problem. Any bug fix or improvement needed to be applied twice, and the distinction between them was largely artificial — the multi-site Worker already handled a single site correctly when `WP_CRON_SITES` contained just one entry. Keeping a separate, simpler version offered no practical advantage and created confusion about which branch to use.
+
+**What changed:**
+
+- The single-site branch (`main`) and multi-site branch have been merged. The multi-site Worker is now the sole version, renamed simply as the WordPress Cron Worker.
+- All references to "single-site" and "multi-site" have been removed from the code, comments, README, and CHANGELOG. The Worker is described as handling "one or more sites" throughout.
+- The README has been rewritten as a single setup guide, with clearly labelled single-site and multi-site JSON examples side by side under the same instructions.
+- The KV dashboard and status tracking features — previously introduced in the multi-site branch — are now documented as standard features available to all users regardless of how many sites they manage.
+- The `archive/single-site` branch and `v1.0-single-site` tag are preserved in the repository as a permanent reference to the previous single-site implementation.
+
+**What did not change:**
+
+- The `worker.js` logic is identical to v2.0.2. No functional changes were made to the scheduled handler, KV integration, dashboard renderer, or fetch handler.
+- Existing deployments require no changes. Environment variables, KV bindings, and Cron Trigger schedules all remain valid.
+
+### Fixes (carried over from review during consolidation)
+
+- **Corrected timeout value in README.** The Troubleshooting table previously stated a 10-second timeout; the actual value in the Worker has always been 25 seconds (`REQUEST_TIMEOUT_MS = 25_000`). The README now reflects the correct value.
+- **Corrected fetch handler behaviour in README.** The Notes section previously stated that direct HTTP requests to the Worker URL return `403 Forbidden`. In reality, the fetch handler returns a JSON status message with HTTP 200. The note has been corrected.
+- **Updated User-Agent header** from `Cloudflare-Worker-WP-Cron/2.0` to `Cloudflare-Worker-WP-Cron/3.0` to reflect the version bump.
+- **Updated dashboard page title** from "WP Cron — Multi-Site Dashboard" to "WP Cron Dashboard".
 
 ---
 
@@ -15,12 +47,12 @@ All notable changes to the Multi-Site version of this Worker are recorded here.
 
 ### Bug fixes
 
-- **Added missing `fetch` handler.** Cloudflare requires every Worker to export a `fetch` handler, even if the Worker is cron-only. Without it, any direct HTTP request to the Worker URL — including Cloudflare's own dashboard preview — would produce a runtime exception (`Handler does not export a fetch() function`). The Worker now returns `403 Forbidden` for all HTTP requests, which is the correct response for a cron-only Worker.
+- **Added missing `fetch` handler.** Cloudflare requires every Worker to export a `fetch` handler, even if the Worker is cron-only. Without it, any direct HTTP request to the Worker URL — including Cloudflare's own dashboard preview — would produce a runtime exception (`Handler does not export a fetch() function`). The Worker now returns a JSON status message for all HTTP requests.
 
 - **Fixed `WP_CRON_SITES` parsing when added as a JSON binding.** If `WP_CRON_SITES` was added in the Cloudflare dashboard as a **JSON** binding type (rather than a Secret), Cloudflare pre-parses the value before passing it to the Worker, making `JSON.parse()` fail with `"[object Obj"... is not valid JSON`. The Worker now checks `typeof env.WP_CRON_SITES` and skips `JSON.parse()` if the value is already an object. Both binding types are now handled correctly, though **Secret** remains the recommended type as documented.
 
-
 ### Added
+
 - **KV namespace binding** (`WP_CRON_KV`) — the Worker now writes the result
   of every cron run to Cloudflare KV storage for monitoring and diagnostics.
 - `status:<hostname>` key — stores the latest run result per site (HTTP status,
@@ -54,7 +86,7 @@ All notable changes to the Multi-Site version of this Worker are recorded here.
 
 - **Parallel execution.** Sites are now triggered in parallel using `Promise.allSettled` instead of one after another. This means the total run time is roughly equal to the slowest individual site, not the sum of all sites.
 
-- **Request timeout.** Each site fetch now has a 10-second timeout via `AbortController`. A slow or unresponsive site will no longer hang the Worker indefinitely.
+- **Request timeout.** Each site fetch now has a 25-second timeout via `AbortController`. A slow or unresponsive site will no longer hang the Worker indefinitely.
 
 - **URL validation.** The Worker now checks each entry before attempting a fetch and logs a clear error message if the `url` or `key` field is missing or malformed.
 
@@ -62,17 +94,10 @@ All notable changes to the Multi-Site version of this Worker are recorded here.
 
 - **Response body capped in error logs.** When a site returns an error, the Worker reads up to 500 characters of the response body for debugging, instead of attempting to read the full (potentially large) error page.
 
-### Naming
-
-- The project is now referred to as the **Multi-Site** version (previously "Multi-Secure" or "multi domain"). The companion script is the **Single-Site** version. "Site" is the appropriate term because each entry represents a full WordPress installation identified by its base URL — not just a domain name.
-
 ### README
 
 - Rewrote all sections for clarity. Plain English throughout, with no assumed knowledge of Cloudflare internals.
-- Added a **Single-Site vs Multi-Site** comparison table.
 - Added an explanation of why offloading WP-Cron to a Worker is beneficial.
-- Clarified that "Multi-Site" refers to multiple independent WordPress installations and is unrelated to the WordPress Multisite (network) feature.
-- Corrected the "How it works" URL template, which previously showed `https://{domain}/wp-cron.php` — implying the field held only a domain name, when it actually holds a full URL.
 - Updated Apache configuration from the deprecated Apache 2.2 `Order Deny,Allow` syntax to the current Apache 2.4 `Require` directive.
 - Recommended using **Secret** type (not Plain text) for `WP_CRON_SITES`, since it contains authentication keys.
 - Added a Testing section covering Wrangler local testing and the Cloudflare Past Events log.
