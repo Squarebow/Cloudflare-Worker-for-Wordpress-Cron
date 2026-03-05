@@ -306,7 +306,7 @@ Entries expire automatically after 48 hours.
 
 1. Go to **Storage & databases → Workers KV** → click **Create instance**.
    Name it anything (e.g. `wp-cron-status`) and save.
-2. Open your Worker → **Compute → Workers & Pages → Overview** → click **+ Binding → select **KV namespace** and click **Add Binding**
+2. Open your Worker → **Compute → Workers & Pages → Overview** → click **+ Binding** → select **KV namespace** and click **Add Binding**
 3. Set the variable name to `WP_CRON_KV` and select the namespace you just
    created. Click **Add Binding**, then redeploy the Worker.
 
@@ -321,11 +321,17 @@ KV Pairs tab. Search by prefix `status:` or `history:` and click view.
 Open your Worker → **Compute → Workers & Pages → Overview** → click **Visit** icon in the top right corner.
 
 A new browser tab will open displaying JSON raw format, something like:
+
 `{
+
   "worker": "CF WP Cron",
+  
   "status": "active",
+  
   "tip": "Add ?kv=status or ?kv=history to read KV data.",
+  
   "time": "2026-03-05T11:25:30.547Z"
+  
   }`
   
 Now, append one of the two available query parameters to the end of the URL: `/?kv=status` or `/?kv=history`
