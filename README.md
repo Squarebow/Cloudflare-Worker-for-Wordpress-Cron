@@ -1,12 +1,12 @@
 # Cloudflare Worker for WordPress Cron
-### Single-Site Version (switch branch to multi-site for multi-site version)
+### Multi-Site Version (switch branch to main for single-site version)
 
-Trigger `wp-cron.php` for one WordPress site reliably from Cloudflare's network, replacing WordPress's built-in scheduler. Switch between main and multi-site branch for the version that suits you best.
+Trigger `wp-cron.php` for any number of independent WordPress sites from a single Cloudflare Worker, with a separate secret key per site. Switch between main and multi-site branch for the version that suits you.
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-Single--Site-blue)
+![Version](https://img.shields.io/badge/Version-Multi--Site-purple)
 
 ---
 
@@ -16,6 +16,7 @@ Trigger `wp-cron.php` for one WordPress site reliably from Cloudflare's network,
 - [Single-Site vs Multi-Site: which version do I need?](#single-site-vs-multi-site-which-version-do-i-need)
 - [Why offload WordPress cron to a Worker?](#why-offload-wordpress-cron-to-a-worker)
 - [Performance and server load](#performance-and-server-load)
+- [Hosting compatibility](#hosting-compatibility)
 - [How it works](#how-it-works)
 - [Setup](#setup)
 - [Securing wp-cron.php on your server](#securing-wp-cronphp-on-your-server)
@@ -29,19 +30,20 @@ Trigger `wp-cron.php` for one WordPress site reliably from Cloudflare's network,
 
 WordPress has a built-in task scheduler called **WP-Cron**. By default it runs on every page load, which wastes server resources and is unreliable on low-traffic sites. The standard solution is to disable the built-in scheduler and trigger `wp-cron.php` from an external source on a fixed schedule.
 
-This Worker does exactly that. It runs on Cloudflare's network on a timed schedule (a **Cron Trigger**), sends an authenticated HTTP GET request to `wp-cron.php` on your site, and logs the result — all without touching your web server's own cron daemon.
+This Worker does exactly that. It runs on Cloudflare's network on a timed schedule (a **Cron Trigger**), loops through your list of WordPress sites, and sends an authenticated HTTP request to `wp-cron.php` on each one — all without touching your web server's own cron daemon.
 
 ---
 
 ## Single-Site vs Multi-Site: which version do I need?
 
-| | Single-Site (this version) | Multi-Site |
+| | Single-Site | Multi-Site (this version) |
 |---|---|---|
 | **Number of WordPress sites** | One | Two or more |
-| **Configuration** | Two environment variables (`WP_CRON_URL`, `WP_CRON_KEY`) | One JSON array (`WP_CRON_SITES`) with a `url` and `key` per site |
-| **Requires a Worker Route** | Yes — bound to `your-site.com/wp-cron.php*` | No |
-| **Browser test** | Visit `https://your-site.com/wp-cron.php` — the Worker responds directly | Not applicable |
+| **Configuration** | Two separate environment variables (`WP_CRON_URL`, `WP_CRON_KEY`) | One JSON array (`WP_CRON_SITES`) with a `url` and `key` per site |
+| **Worker instances needed** | One per site | One for all sites |
 | **Good for** | A single blog or application | Agencies, developers, or anyone managing multiple sites |
+
+> **Note:** "Multi-Site" here means multiple independent WordPress installations. This is **not** related to [WordPress Multisite](https://wordpress.org/documentation/article/create-a-network/) (WordPress's built-in network feature for running sub-sites under one installation).
 
 ---
 
@@ -50,7 +52,7 @@ This Worker does exactly that. It runs on Cloudflare's network on a timed schedu
 - **Reliability.** WP-Cron only runs when someone visits your site. Low-traffic sites may miss scheduled tasks entirely.
 - **Performance.** Every WP-Cron check adds overhead to real page loads. Disabling it removes that overhead.
 - **No server cron needed.** You don't need SSH access or the ability to edit the server's crontab.
-- **Free.** Cloudflare Workers are free up to 100,000 requests per day.
+- **Centralised.** One Worker handles all your sites. You manage the schedule in one place.
 
 ---
 
@@ -80,8 +82,6 @@ Every page request to a WordPress site triggers a call to `spawn_cron()`, which 
 
 Regardless of traffic, WordPress cron only needs to run approximately once per minute. The Worker does exactly that — 1,440 times per day — replacing an unpredictable number of server self-requests with a fixed, predictable load entirely separate from visitor traffic.
 
----
-
 ### Where the gain is most felt
 
 **Low-traffic sites** gain reliability above all else. WP-Cron may never fire at all if no visitors arrive during off-hours. The Worker runs on a fixed schedule regardless.
@@ -94,20 +94,61 @@ Regardless of traffic, WordPress cron only needs to run approximately once per m
 
 You replace up to tens of thousands of daily server self-requests — each a full PHP and WordPress bootstrap — with exactly **1,440 lightweight requests per day** from Cloudflare's network, cleanly separated from real visitor traffic and costing your server nothing to initiate.
 
+---
+
+## Hosting compatibility
+
+Any publicly reachable WordPress site can be added to the `WP_CRON_SITES` array,
+regardless of where it is hosted. The Worker makes a standard HTTP GET request to
+`/wp-cron.php` on each site — it has no dependency on the target site's hosting
+provider or infrastructure.
+
+This means the following all work without any special configuration:
+
+- Sites hosted on **shared hosting** (no SSH or crontab access needed)
+- Sites on **managed WordPress hosting** (WP Engine, Kinsta, Flywheel, etc.)
+- Sites on a **VPS or dedicated server**
+- Sites behind **Cloudflare's proxy** (orange cloud on or off)
+- Sites on hosting providers with **no Cloudflare connection at all**
+- Sites on **different servers, different countries, different providers** — all
+  managed by a single Worker instance
+
+The only hard requirements are:
+
+1. The site must be **publicly reachable** over HTTPS
+2. The `/wp-cron.php` endpoint must **not be blocked** by a firewall, WAF rule,
+   or IP allowlist that would reject Cloudflare's outbound IP ranges
+3. The site must be running **WordPress** — the URL receives a standard WP-Cron
+   HTTP request, so non-WordPress URLs will return errors (logged in KV as failed
+   runs, but will not affect the other sites in the list)
+   
+---
 
 ## How it works
 
-The Worker has two handlers that share the same core logic:
+The Worker reads the environment variable `WP_CRON_SITES`, which holds a JSON array. Each entry in the array has two fields:
 
-**`scheduled()` — the automated path.** Cloudflare calls this on your chosen schedule (e.g. every minute). The Worker sends an HTTP GET request to `https://your-site.com/wp-cron.php?doing_wp_cron` with a secret `X-Worker-Auth` header. If WordPress returns HTTP 200, the run is logged as a success.
+| Field | Description                                   | Example                    |
+|-------|-----------------------------------------------|----------------------------|
+| `url` | Full base URL of the WordPress site           | `https://example.com`      |
+| `key` | Secret string sent in the `X-Worker-Auth` header | `my-secret-key-123`    |
 
-**`fetch()` — the manual/test path.** The Worker is also bound to a Route on your domain (`your-site.com/wp-cron.php*`). When you visit that URL in a browser, the `fetch()` handler fires the same cron request and returns a confirmation message directly:
+On every scheduled run, the Worker fires an HTTP GET request to `{url}/wp-cron.php?doing_wp_cron` for each site in parallel. The request includes a `X-Worker-Auth` header so your server can verify the call is genuine and reject any direct access.
 
-```
-Cloudflare Worker for WordPress works. Yay!
-```
+All requests run in **parallel** (not one after another), so the total time is roughly equal to the slowest single site, regardless of how many sites you have.
 
-Any other URL on your site (normal pages, images, etc.) passes straight through to your origin server — the Worker does not interfere.
+## Cloudflare free tier usage
+
+Every cron trigger fire counts as **1 Worker request**, regardless of how many sites are in your list. The sites inside are **subrequests**, counted separately and not subject to the same daily cap.
+
+With `* * * * *` (every minute) and 3 sites configured:
+
+| What | Daily count |
+|---|---|
+| Worker requests (cron fires) | 1,440 |
+| Subrequests (site calls) | 4,320 |
+
+Cloudflare's free tier allows **100,000 Worker requests per day** — you would need to manage roughly 70 sites before approaching that limit. Adding more sites to your JSON array costs nothing extra in terms of free tier quota.
 
 ---
 
@@ -117,96 +158,61 @@ Any other URL on your site (normal pages, images, etc.) passes straight through 
 
 1. Log in to the [Cloudflare dashboard](https://dash.cloudflare.com).
 2. Go to **Workers & Pages** → **Create** → **Create Worker**.
-3. Give it a name (e.g. `wp-cron`) and click **Deploy**.
-4. Click **Edit code**, replace the default code with the contents of `worker.js`, and click **Deploy** again.
+3. Give the Worker a name (e.g. `wp-cron`) and click **Deploy**.
+4. Click **Edit code** and replace the default code with the contents of `worker.js`.
+5. Click **Deploy** again to save.
 
-### 2. Add environment variables
+### 2. Add the environment variable
 
-Go to your Worker → **Settings** → **Variables and Secrets** and add:
+1. In your Worker, go to **Settings** → **Variables and Secrets**.
+2. Add a new variable:
 
 | Name | Type | Value |
 |------|------|-------|
-| `WP_CRON_URL` | Plain text | Full base URL of your site, e.g. `https://example.com` |
-| `WP_CRON_KEY` | **Secret** | A long, random string — treat it like a password |
+| `WP_CRON_SITES` | **Secret** | Your JSON array (see format below) |
 
-> `WP_CRON_KEY` must be **Secret** (not Plain text). Secrets are encrypted at rest and are not visible in the dashboard after saving.
+> Use **Secret** (not Plain text) because the value contains your site keys. Secrets are encrypted at rest and are not visible in the dashboard after saving.
 
-### 3. Add a Worker Route
+#### WP_CRON_SITES format
 
-The Route is what connects this Worker to your domain so the `fetch()` handler can intercept browser visits to `/wp-cron.php` and return the confirmation message.
+```json
+[
+  { "url": "https://site1.com",      "key": "a-strong-secret-1" },
+  { "url": "https://site2.net",      "key": "a-strong-secret-2" },
+  { "url": "https://blog.site3.org", "key": "a-strong-secret-3" }
+]
+```
 
-1. In the Cloudflare dashboard, go to **Websites** → select your domain → **Workers Routes** → **Add Route**.
-2. Set the route pattern to:
-   ```
-   your-site.com/wp-cron.php*
-   ```
-3. Select this Worker from the dropdown and save.
+Each `url` must include the scheme (`https://`) and must not have a trailing slash. Each `key` should be a unique, hard-to-guess string — treat it like a password.
 
-> The `*` wildcard at the end ensures the route matches `wp-cron.php?doing_wp_cron` and any other query string.
+**To add a site later**, edit the JSON and add a new `{ "url": "...", "key": "..." }` object to the array.
 
-### 4. Add a WAF skip rule (if your site uses Cloudflare WAF)
-
-If your domain is proxied through Cloudflare and you have WAF (Web Application Firewall) rules enabled, the cron request from the Worker may be blocked before it reaches your server. Add a skip rule to allow it through.
-
-1. Go to **Security** → **WAF** → **Custom Rules** → **Create rule**.
-2. Set the match expression to:
-   ```
-   (http.request.uri.path eq "/wp-cron.php" and http.request.headers["x-worker-auth"] ne "")
-   ```
-3. Set **Action** to **Skip** → **All remaining custom rules**.
-4. Enable logging and save.
-5. Place this rule **above** any existing rules that block `wp-cron.php`.
-
-> If you are not using Cloudflare WAF, skip this step.
-
-### 5. Add a Cron Trigger
+### 3. Add a Cron Trigger
 
 1. In your Worker, go to **Settings** → **Triggers** → **Cron Triggers** → **Add Cron Trigger**.
-2. Enter the cron expression for every minute (the minimum Cloudflare allows):
-   ```
-   * * * * *
-   ```
+2. Enter a cron expression. One minute is the minimum interval Cloudflare allows:
 
-> All Cloudflare Cron Triggers run in UTC.
+```
+* * * * *
+```
 
-### 6. Disable WP-Cron on your WordPress site
+> Cloudflare uses UTC for all cron schedules.
 
-Add the following line to `wp-config.php`, **before** the line that says `/* That's all, stop editing! */`:
+### 4. Disable WP-Cron on each WordPress site
+
+Add the following line to each site's `wp-config.php`, **before** the line that says `/* That's all, stop editing! */`:
 
 ```php
 define( 'DISABLE_WP_CRON', true );
 ```
 
-This tells WordPress not to run its built-in scheduler on page loads. The Worker now owns that responsibility entirely.
-
-### 7. Test
-
-Visit this URL in your browser:
-
-```
-https://your-site.com/wp-cron.php
-```
-
-You should see:
-
-```
-Cloudflare Worker for WordPress works. Yay!
-```
-
-This confirms the Worker Route is active, the Worker can reach your site, and WordPress returned HTTP 200. The Worker itself generates this message — no changes to WordPress are needed.
-
-If you see your normal site instead of the message, the Worker Route is not active yet. Check that the route pattern is correct and that the Worker is deployed.
-
-### 8. Monitor
-
-Go to your Worker → **Observability** → **Logs** to see a log line for every cron run.  
-Go to **Triggers** → **Cron Triggers** → **Past Events** for a history of the last 100 invocations.
+This tells WordPress not to run its built-in scheduler on page loads. The Worker now takes over that responsibility entirely.
 
 ---
 
 ## Securing wp-cron.php on your server
 
-Once `DISABLE_WP_CRON` is set, `wp-cron.php` should only respond to requests from this Worker. Block all other access using the `X-Worker-Auth` header as the gate.
+Once `DISABLE_WP_CRON` is set, `wp-cron.php` only needs to respond to requests from this Worker. You should block all other access to it. The examples below use the `X-Worker-Auth` header as the gate.
 
 ### Apache (2.4+)
 
@@ -228,11 +234,97 @@ location = /wp-cron.php {
     if ($http_x_worker_auth = "") {
         return 403;
     }
-    # Continue to your normal PHP handler:
+    # Continue to your normal PHP handler, e.g.:
     include fastcgi_params;
     fastcgi_pass php-handler;
 }
 ```
+
+> **Tip:** For stronger protection, you can also verify the value of `X-Worker-Auth` matches the expected key, not just that the header is present. This can be done in a WordPress `mu-plugin` or at the server level.
+
+---
+
+## Testing
+
+### Check the Worker runs at all
+
+Use [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare's CLI tool) to trigger the scheduled handler locally:
+
+```bash
+npx wrangler dev --test-scheduled
+# Then in another terminal:
+curl "http://localhost:8787/__scheduled"
+```
+
+### Check a specific site is reachable
+
+Open this URL in a browser (replacing the domain with your own):
+
+```
+https://your-site.com/wp-cron.php?doing_wp_cron
+```
+
+If WordPress is installed correctly you should get a blank or very short response with HTTP 200. A 404 means the file is missing or blocked.
+
+### View live Worker logs
+
+In the Cloudflare dashboard, go to your Worker → **Observability** → **Logs**. You will see a log line per site on every run, confirming success or showing the error.
+
+### Check past runs
+
+Go to your Worker → **Triggers** → **Cron Triggers** → **Past Events** to see a history of the last 100 invocations and their status.
+
+---
+
+## KV status tracking (optional)
+
+The Multi-Site Worker can log the result of every cron run to a
+[Cloudflare KV namespace](https://developers.cloudflare.com/kv/). This gives
+you a lightweight audit trail without any external monitoring service.
+
+### What gets stored
+
+For each site, two keys are maintained:
+
+| KV key | Contents |
+|---|---|
+| `status:<hostname>` | Latest run only — always overwritten |
+| `history:<hostname>` | Last 10 runs, newest first |
+
+Each entry records the site URL, HTTP status code, success flag, start and
+finish timestamps, a preview of the response body, and any error message.
+Entries expire automatically after 48 hours.
+
+### Setup
+
+1. Go to **Workers & Pages → KV** → click **Create namespace**.
+   Name it anything (e.g. `wp-cron-status`) and save.
+2. Open your Worker → **Settings → Bindings → Add** → choose **KV namespace**.
+3. Set the variable name to `WP_CRON_KV` and select the namespace you just
+   created. Click **Add Binding**, then redeploy the Worker.
+
+### Reading the data
+
+After the first scheduled cron run you can inspect the stored data in two ways:
+
+**Cloudflare Dashboard** — Workers & Pages → KV → select your namespace →
+KV Pairs tab. Search by prefix `status:` or `history:`.
+
+**Worker URL** — append a query parameter to your Worker's URL:
+```
+# Latest run for all sites
+https://your-worker.workers.dev/?kv=status
+
+# Last 10 runs for all sites
+https://your-worker.workers.dev/?kv=history
+
+# Filter to a single site
+https://your-worker.workers.dev/?kv=status&site=example.com
+https://your-worker.workers.dev/?kv=history&site=example.com
+```
+
+> **Note:** KV is fully optional. If the binding is not added, the Worker
+> operates exactly as before — no errors, no changed behaviour.
 
 ---
 
@@ -240,21 +332,22 @@ location = /wp-cron.php {
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Browser shows your normal site instead of the confirmation | Worker Route not active | Check the route pattern in **Websites → Workers Routes** |
-| `Missing environment variable` message in browser | `WP_CRON_URL` or `WP_CRON_KEY` not set | Add both variables in Worker **Settings → Variables and Secrets** |
-| HTTP 403 from your server | WAF or server rule blocking the request | Add or check the WAF skip rule (Step 4) |
-| HTTP 404 | `wp-cron.php` not found or blocked at server level | Confirm the file exists and is accessible |
-| HTTP 5xx from your server | WordPress or PHP error | Check the WordPress error log on the server |
-| Timeout in Worker logs | Site is too slow to respond | Check server load; the Worker times out after 10 seconds |
-| Cron jobs still not running | `DISABLE_WP_CRON` not set, or set in the wrong place | Confirm `define( 'DISABLE_WP_CRON', true )` is in `wp-config.php` before the stop-editing comment |
-| `1101` Worker error | JavaScript exception in the Worker | Open Worker **Observability → Logs** for the full error |
+| `Failed to parse WP_CRON_SITES: Unexpected token 'o', "[object Obj"... is not valid JSON` | `WP_CRON_SITES` was added as a **JSON** binding type instead of a **Secret** | Re-add the variable as type **Secret** with the raw JSON string as its value |
+| `WP_CRON_SITES` parse error in logs | Invalid JSON in the variable | Validate your JSON at [jsonlint.com](https://jsonlint.com) before saving |
+| HTTP 403 for a site | Server is blocking the request | Check your `X-Worker-Auth` header rules on that server |
+| HTTP 404 for a site | `wp-cron.php` not found or blocked | Confirm the file exists and is not blocked by a firewall rule |
+| HTTP 5xx for a site | WordPress or PHP error | Check that site's WordPress error log |
+| Timeout in logs | Site is too slow to respond | Check server load; the Worker times out after 10 seconds per site |
+| Cron jobs still not running | `DISABLE_WP_CRON` not set | Confirm `define( 'DISABLE_WP_CRON', true )` is in `wp-config.php` |
+| Worker trigger `1101` error | JavaScript exception | Open Worker logs to see the full error message |
 
 ---
 
 ## Notes and limitations
 
-- **Cron Triggers run in UTC.** Factor this in if your scheduled WordPress tasks are time-sensitive.
-- **Minimum trigger interval is 1 minute.** This matches WordPress's own scheduler resolution.
-- **There is a limit of 3 Cron Trigger schedules per Worker.** You can combine expressions if needed.
-- **The `fetch()` handler only intercepts `/wp-cron.php`.** All other paths on your domain pass through to your origin without modification.
-- **This version handles one site.** For multiple independent WordPress sites, use the Multi-Site version instead.
+- **Cron Triggers execute in UTC.** Factor this in if your scheduled WordPress tasks are time-sensitive.
+- **Minimum trigger interval is 1 minute.** WordPress's built-in scheduler also uses minute-level resolution, so this matches the expected behaviour.
+- **There is a limit of 3 Cron Trigger schedules per Worker.** You can combine multiple expressions if needed (e.g. one every minute, one every hour).
+- **All sites run in parallel.** If one site is slow or unreachable, it does not delay the others. Each site has a 10-second timeout.
+- **Cron Trigger history shows the last 100 runs.** For longer retention, enable [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/) in the dashboard.
+- **Direct HTTP requests return 403.** The Worker includes a `fetch` handler that returns `403 Forbidden` for any direct HTTP request to the Worker URL. This is intentional — the Worker only acts on scheduled cron triggers. Cloudflare requires a `fetch` handler to be present; without it, visiting the Worker URL would produce an internal runtime error instead of a clean response.
