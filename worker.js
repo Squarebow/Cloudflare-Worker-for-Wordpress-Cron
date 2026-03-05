@@ -1,8 +1,9 @@
 /*
-  Cloudflare Worker — Multi-Site WordPress Cron + KV Status Tracking v 2.0.2
+  Cloudflare Worker — WordPress Cron + KV Status Tracking v3.0.0
   -------------------------------------------------------------------
-  Triggers wp-cron.php for multiple WordPress sites on a fixed schedule,
-  and writes the result of each run to a KV namespace for monitoring.
+  Triggers wp-cron.php for one or more WordPress sites on a fixed
+  schedule, and writes the result of each run to a KV namespace for
+  monitoring.
 
   KV binding required (Settings → Variables and Secrets → KV Namespace Bindings):
     Binding name:  WP_CRON_KV
@@ -13,6 +14,10 @@
                      [
                        { "url": "https://site1.com", "key": "secret1" },
                        { "url": "https://site2.com", "key": "secret2" }
+                     ]
+                     A single site is also valid:
+                     [
+                       { "url": "https://mysite.com", "key": "my-secret" }
                      ]
 
   KV keys written per site (auto-expire after 48 hours):
@@ -180,7 +185,7 @@ async function triggerSite(site) {
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const headers = { "User-Agent": "Cloudflare-Worker-WP-Cron/2.0" };
+    const headers = { "User-Agent": "Cloudflare-Worker-WP-Cron/3.0" };
     if (site.key) headers["X-Worker-Auth"] = site.key;
 
     const response = await fetch(url, {
@@ -302,56 +307,47 @@ function renderHistoryRow(entry, index) {
   const ts = entry.finishedAt
     ? new Date(entry.finishedAt).toLocaleString("sl-SI", { timeZone: "Europe/Ljubljana" })
     : "—";
-  const duration = entry.startedAt && entry.finishedAt
-    ? `${Math.round((new Date(entry.finishedAt) - new Date(entry.startedAt)))}ms`
-    : "—";
+  const statusCode = entry.status ?? "—";
+  const error = entry.error ?? "";
 
   return `
-    <tr class="${success ? "row-ok" : "row-fail"}">
+    <tr class="${success ? "" : "row-fail"}">
       <td>${index + 1}</td>
+      <td><span class="badge ${success ? "badge-ok" : "badge-fail"}">${success ? "✓ OK" : "✗ Fail"}</span></td>
+      <td>${statusCode}</td>
       <td>${ts}</td>
-      <td><span class="badge ${success ? "badge-ok" : "badge-fail"}">${success ? "✓ OK" : "✗ Failed"}</span></td>
-      <td>${entry.status ?? "—"}</td>
-      <td>${duration}</td>
-      <td class="error-cell">${entry.error ?? ""}</td>
+      <td class="error-cell">${error}</td>
     </tr>`;
 }
 
 /**
- * Build the full HTML page for the dashboard.
- * type = "status" | "history"
- * data = { hostname: entry | entry[] | null }
+ * Render the full HTML page for the dashboard.
  */
 function renderHTML(type, data) {
-  const title = type === "history" ? "Run History" : "Current Status";
   const now = new Date().toLocaleString("sl-SI", { timeZone: "Europe/Ljubljana" });
-  const hosts = Object.keys(data);
 
   let body = "";
 
   if (type === "status") {
-    body = hosts.map((host) => renderCard(host, data[host])).join("\n");
-
+    body = Object.entries(data)
+      .map(([host, entry]) => renderCard(host, entry))
+      .join("\n");
   } else {
-    body = hosts.map((host) => {
-      const entries = Array.isArray(data[host]) ? data[host] : [];
-      const rows = entries.length
-        ? entries.map((e, i) => renderHistoryRow(e, i)).join("\n")
-        : `<tr><td colspan="6" class="hint">No history yet.</td></tr>`;
-
+    body = Object.entries(data).map(([host, entries]) => {
+      if (!entries || entries.length === 0) {
+        return `
+          <div class="history-block">
+            <h2>${host}</h2>
+            <p class="hint">No history yet.</p>
+          </div>`;
+      }
+      const rows = entries.map((e, i) => renderHistoryRow(e, i)).join("\n");
       return `
         <div class="history-block">
           <h2>${host}</h2>
           <table>
             <thead>
-              <tr>
-                <th>#</th>
-                <th>Time</th>
-                <th>Result</th>
-                <th>HTTP</th>
-                <th>Duration</th>
-                <th>Error</th>
-              </tr>
+              <tr><th>#</th><th>Result</th><th>HTTP</th><th>Time</th><th>Error</th></tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
@@ -364,7 +360,7 @@ function renderHTML(type, data) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WP Cron — ${title}</title>
+  <title>WP Cron Dashboard</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -559,7 +555,7 @@ function renderHTML(type, data) {
 </head>
 <body>
   <header>
-    <h1><span class="logo">CF</span> WP Cron — Multi-Site Dashboard</h1>
+    <h1><span class="logo">CF</span> WP Cron Dashboard</h1>
     <span class="meta">Updated: ${now}</span>
   </header>
 
@@ -645,7 +641,10 @@ export default {
   /**
    * fetch() — fired when the Worker URL is accessed over HTTP.
    * Used for the read-only KV dashboard (?kv=status / ?kv=history).
-   * All other paths return a simple status message.
+   * All other paths return a plain JSON status message.
+   * Cloudflare requires a fetch handler to be present even on cron-only Workers;
+   * without it, visiting the Worker URL produces a runtime error instead of a
+   * clean response.
    */
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -660,7 +659,7 @@ export default {
     // Default: plain status page
     return new Response(
       JSON.stringify({
-        worker: "CF WP Cron — Multi-Site",
+        worker: "CF WP Cron",
         status: "active",
         tip: "Add ?kv=status or ?kv=history to read KV data.",
         time: new Date().toISOString(),
