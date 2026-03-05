@@ -321,11 +321,16 @@ KV Pairs tab. Search by prefix `status:` or `history:` and click view.
 Open your Worker → **Compute → Workers & Pages → Overview** → click **Visit** icon in the top right corner.
 
 A new browser tab will open displaying JSON raw format, something like:  
-  `{  
+  `{ 
+  
   "worker": "CF WP Cron",  
+  
   "status": "active",    
+  
   "tip": "Add ?kv=status or ?kv=history to read KV data.",  
+  
   "time": "2026-03-05T11:25:30.547Z"  
+  
   }`  
   
 Now, append one of the two available query parameters to the end of the URL: `/?kv=status` or `/?kv=history`
