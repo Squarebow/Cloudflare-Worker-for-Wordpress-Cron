@@ -1,6 +1,6 @@
 # Cloudflare Worker for WordPress Cron
 
-Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare Worker, with per-site authentication, KV status tracking, and a built-in monitoring dashboard.
+Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare Worker, with per-site authentication, KV status tracking, and a built-in monitoring dashboard. Made for Cloudflare FREE tier with no dependency on the target site's hosting provider or infrastructure.
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
@@ -147,22 +147,26 @@ Cloudflare's free tier allows **100,000 Worker requests per day** — you would 
 ### 1. Create the Worker
 
 1. Log in to the [Cloudflare dashboard](https://dash.cloudflare.com).
-2. Go to **Workers & Pages** → **Create** → **Create Worker**.
+2. Go to **Compute** → **Workers & Pages** → **Create application** → **Start with Hello World!**
 3. Give the Worker a name (e.g. `wp-cron`) and click **Deploy**.
 4. Click **Edit code** and replace the default code with the contents of `worker.js`.
 5. Click **Deploy** again to save.
 
 ### 2. Add the environment variable
 
-1. In your Worker, go to **Settings** → **Variables and Secrets**.
-2. Add a new variable:
+1. In your Worker, go to **Settings** → **Variables and Secrets** → **+Add**.
+2. Add a new variable named `WP_CRON_SITES`. Two binding types work:
 
-| Name | Type | Value |
-|------|------|-------|
-| `WP_CRON_SITES` | **Secret** | Your JSON array (see format below) |
+| Type | Behaviour |
+|------|-----------|
+| **Secret** | Cloudflare stores and displays the value as masked. The Worker receives a raw string and parses it as JSON internally. |
+| **JSON** | Cloudflare parses the value automatically and passes a ready JavaScript array to the Worker. The value is visible in the Dashboard bindings panel. |
+
+Both types are fully supported. **Secret is recommended** because your JSON contains authentication keys — masking them in the Dashboard reduces the risk of accidental exposure.
+
+> **Tip:** If you accidentally add the variable as the wrong type and the Worker logs a JSON parse error, simply delete the binding and re-add it with the correct type. No other changes are needed.
 
 **Format for a single site:**
-
 ```json
 [
   { "url": "https://mysite.com", "key": "a-strong-secret" }
@@ -170,7 +174,6 @@ Cloudflare's free tier allows **100,000 Worker requests per day** — you would 
 ```
 
 **Format for multiple sites:**
-
 ```json
 [
   { "url": "https://site1.com", "key": "a-strong-secret-1" },
@@ -179,14 +182,16 @@ Cloudflare's free tier allows **100,000 Worker requests per day** — you would 
 ]
 ```
 
+The field order within each object (`url` first or `key` first) does not matter — the Worker reads both fields by name.
+
 Each `url` must include the scheme (`https://`) and must not have a trailing slash. Each `key` should be a unique, hard-to-guess string — treat it like a password.
 
 **To add a site later**, edit the JSON and add a new `{ "url": "...", "key": "..." }` object to the array.
 
 ### 3. Add a Cron Trigger
 
-1. In your Worker, go to **Settings** → **Triggers** → **Cron Triggers** → **Add Cron Trigger**.
-2. Enter a cron expression. One minute is the minimum interval Cloudflare allows:
+1. In your Worker, go to **Settings** → **Trigger Events** → **+Add** → **Cron Triggers**.
+2. Enter a schedule or cron expression. One minute is the minimum interval Cloudflare allows:
 
 ```
 * * * * *
@@ -194,7 +199,11 @@ Each `url` must include the scheme (`https://`) and must not have a trailing sla
 
 > Cloudflare uses UTC for all cron schedules.
 
-### 4. Disable WP-Cron on each WordPress site
+### 4. Enable workers Logs
+
+In your Worker, go to **Observability** → **click Pencil icon to edit** → **Enable Workers Logs**. Set Head-based sampling rate to 100, tick Include invocation logs, enable Persist logs to the Workers dashboard and deploy.
+
+### 5. Disable WP-Cron on each WordPress site
 
 Add the following line to each site's `wp-config.php`, **before** the line that says `/* That's all, stop editing! */`:
 
@@ -264,15 +273,15 @@ If WordPress is installed correctly you should get a blank or very short respons
 
 ### View live Worker logs
 
-In the Cloudflare dashboard, go to your Worker → **Observability** → **Logs**. You will see a log line per site on every run, confirming success or showing the error.
+In the Cloudflare dashboard, go to your Worker → **Observability**. You will events, invocations, traces and visualizations. Under Worker → **Metrics** you will see aggregated data of deployments in selected time slots.
 
 ### Check past runs
 
-Go to your Worker → **Triggers** → **Cron Triggers** → **Past Events** to see a history of the last 100 invocations and their status.
+Go to your Worker → **Trigger Events** → **View Events** to see a history of the last 100 invocations and their status.
 
 ---
 
-## KV status tracking (optional)
+## KV status tracking (optional but highly recommended)
 
 The Worker can log the result of every cron run to a
 [Cloudflare KV namespace](https://developers.cloudflare.com/kv/). This gives
@@ -295,9 +304,9 @@ Entries expire automatically after 48 hours.
 
 ### Setup
 
-1. Go to **Workers & Pages → KV** → click **Create namespace**.
+1. Go to **Storage & databases → Workers KV** → click **Create instance**.
    Name it anything (e.g. `wp-cron-status`) and save.
-2. Open your Worker → **Settings → Bindings → Add** → choose **KV namespace**.
+2. Open your Worker → **Compute → Workers & Pages → Overview** → click **+ Binding → Overview** → select **KV namespace** and click **Add Binding**
 3. Set the variable name to `WP_CRON_KV` and select the namespace you just
    created. Click **Add Binding**, then redeploy the Worker.
 
@@ -305,10 +314,20 @@ Entries expire automatically after 48 hours.
 
 After the first scheduled cron run you can inspect the stored data in two ways:
 
-**Cloudflare Dashboard** — Workers & Pages → KV → select your namespace →
-KV Pairs tab. Search by prefix `status:` or `history:`.
+1. **Cloudflare Dashboard** — Storage & databases → Workers KV → select your namespace →
+KV Pairs tab. Search by prefix `status:` or `history:` and click view.
 
-**Worker URL** — append a query parameter to your Worker's URL:
+2. **Worker URL Custom Dashboard (Recommended)** — append a query parameter to your Worker's URL:
+Open your Worker → **Compute → Workers & Pages → Overview** → click **Visit** icon in top right corner. A new browser tab will open displaying JSON raw format, something like:
+`{
+  "worker": "CF WP Cron",
+  "status": "active",
+  "tip": "Add ?kv=status or ?kv=history to read KV data.",
+  "time": "2026-03-05T11:25:30.547Z"
+}`
+
+Now, append one of the two available query parameters from the tip to the end of the URL: `/?kv=status` or `/?kv=history`
+
 ```
 # Latest run for all sites
 https://your-worker.workers.dev/?kv=status
