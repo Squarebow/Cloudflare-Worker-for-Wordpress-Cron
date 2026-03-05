@@ -1,19 +1,17 @@
 # Cloudflare Worker for WordPress Cron
-### Multi-Site Version (switch branch to main for single-site version)
 
-Trigger `wp-cron.php` for any number of independent WordPress sites from a single Cloudflare Worker, with a separate secret key per site. Switch between main and multi-site branch for the version that suits you.
+Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare Worker, with per-site authentication, KV status tracking, and a built-in monitoring dashboard.
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-Multi--Site-purple)
+![Version](https://img.shields.io/badge/Version-3.0.0-blue)
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Single-Site vs Multi-Site: which version do I need?](#single-site-vs-multi-site-which-version-do-i-need)
 - [Why offload WordPress cron to a Worker?](#why-offload-wordpress-cron-to-a-worker)
 - [Performance and server load](#performance-and-server-load)
 - [Hosting compatibility](#hosting-compatibility)
@@ -21,6 +19,7 @@ Trigger `wp-cron.php` for any number of independent WordPress sites from a singl
 - [Setup](#setup)
 - [Securing wp-cron.php on your server](#securing-wp-cronphp-on-your-server)
 - [Testing](#testing)
+- [KV status tracking (optional)](#kv-status-tracking-optional)
 - [Troubleshooting](#troubleshooting)
 - [Notes and limitations](#notes-and-limitations)
 
@@ -32,18 +31,9 @@ WordPress has a built-in task scheduler called **WP-Cron**. By default it runs o
 
 This Worker does exactly that. It runs on Cloudflare's network on a timed schedule (a **Cron Trigger**), loops through your list of WordPress sites, and sends an authenticated HTTP request to `wp-cron.php` on each one — all without touching your web server's own cron daemon.
 
----
+It works equally well for a single site or many. You configure a JSON array with one entry or twenty; the Worker handles both identically.
 
-## Single-Site vs Multi-Site: which version do I need?
-
-| | Single-Site | Multi-Site (this version) |
-|---|---|---|
-| **Number of WordPress sites** | One | Two or more |
-| **Configuration** | Two separate environment variables (`WP_CRON_URL`, `WP_CRON_KEY`) | One JSON array (`WP_CRON_SITES`) with a `url` and `key` per site |
-| **Worker instances needed** | One per site | One for all sites |
-| **Good for** | A single blog or application | Agencies, developers, or anyone managing multiple sites |
-
-> **Note:** "Multi-Site" here means multiple independent WordPress installations. This is **not** related to [WordPress Multisite](https://wordpress.org/documentation/article/create-a-network/) (WordPress's built-in network feature for running sub-sites under one installation).
+> **Note:** "Multiple sites" here means multiple independent WordPress installations. This is **not** related to [WordPress Multisite](https://wordpress.org/documentation/article/create-a-network/) (WordPress's built-in network feature for running sub-sites under one installation).
 
 ---
 
@@ -121,7 +111,7 @@ The only hard requirements are:
 3. The site must be running **WordPress** — the URL receives a standard WP-Cron
    HTTP request, so non-WordPress URLs will return errors (logged in KV as failed
    runs, but will not affect the other sites in the list)
-   
+
 ---
 
 ## How it works
@@ -133,7 +123,7 @@ The Worker reads the environment variable `WP_CRON_SITES`, which holds a JSON ar
 | `url` | Full base URL of the WordPress site           | `https://example.com`      |
 | `key` | Secret string sent in the `X-Worker-Auth` header | `my-secret-key-123`    |
 
-On every scheduled run, the Worker fires an HTTP GET request to `{url}/wp-cron.php?doing_wp_cron` for each site in parallel. The request includes a `X-Worker-Auth` header so your server can verify the call is genuine and reject any direct access.
+On every scheduled run, the Worker fires an HTTP GET request to `{url}/wp-cron.php?doing_wp_cron` for each site in parallel. The request includes an `X-Worker-Auth` header so your server can verify the call is genuine and reject any direct access.
 
 All requests run in **parallel** (not one after another), so the total time is roughly equal to the slowest single site, regardless of how many sites you have.
 
@@ -171,14 +161,20 @@ Cloudflare's free tier allows **100,000 Worker requests per day** — you would 
 |------|------|-------|
 | `WP_CRON_SITES` | **Secret** | Your JSON array (see format below) |
 
-> Use **Secret** (not Plain text) because the value contains your site keys. Secrets are encrypted at rest and are not visible in the dashboard after saving.
-
-#### WP_CRON_SITES format
+**Format for a single site:**
 
 ```json
 [
-  { "url": "https://site1.com",      "key": "a-strong-secret-1" },
-  { "url": "https://site2.net",      "key": "a-strong-secret-2" },
+  { "url": "https://mysite.com", "key": "a-strong-secret" }
+]
+```
+
+**Format for multiple sites:**
+
+```json
+[
+  { "url": "https://site1.com", "key": "a-strong-secret-1" },
+  { "url": "https://site2.net", "key": "a-strong-secret-2" },
   { "url": "https://blog.site3.org", "key": "a-strong-secret-3" }
 ]
 ```
@@ -278,9 +274,11 @@ Go to your Worker → **Triggers** → **Cron Triggers** → **Past Events** to 
 
 ## KV status tracking (optional)
 
-The Multi-Site Worker can log the result of every cron run to a
+The Worker can log the result of every cron run to a
 [Cloudflare KV namespace](https://developers.cloudflare.com/kv/). This gives
-you a lightweight audit trail without any external monitoring service.
+you a lightweight audit trail without any external monitoring service. It works
+the same whether you have one site or many — each site gets its own entry in KV,
+keyed by hostname.
 
 ### What gets stored
 
@@ -323,6 +321,8 @@ https://your-worker.workers.dev/?kv=status&site=example.com
 https://your-worker.workers.dev/?kv=history&site=example.com
 ```
 
+Visiting these URLs in a browser renders a styled HTML dashboard. Accessing them via `curl` or any API client returns raw JSON.
+
 > **Note:** KV is fully optional. If the binding is not added, the Worker
 > operates exactly as before — no errors, no changed behaviour.
 
@@ -337,7 +337,7 @@ https://your-worker.workers.dev/?kv=history&site=example.com
 | HTTP 403 for a site | Server is blocking the request | Check your `X-Worker-Auth` header rules on that server |
 | HTTP 404 for a site | `wp-cron.php` not found or blocked | Confirm the file exists and is not blocked by a firewall rule |
 | HTTP 5xx for a site | WordPress or PHP error | Check that site's WordPress error log |
-| Timeout in logs | Site is too slow to respond | Check server load; the Worker times out after 10 seconds per site |
+| Timeout in logs | Site is too slow to respond | Check server load; the Worker times out after 25 seconds per site |
 | Cron jobs still not running | `DISABLE_WP_CRON` not set | Confirm `define( 'DISABLE_WP_CRON', true )` is in `wp-config.php` |
 | Worker trigger `1101` error | JavaScript exception | Open Worker logs to see the full error message |
 
@@ -348,6 +348,6 @@ https://your-worker.workers.dev/?kv=history&site=example.com
 - **Cron Triggers execute in UTC.** Factor this in if your scheduled WordPress tasks are time-sensitive.
 - **Minimum trigger interval is 1 minute.** WordPress's built-in scheduler also uses minute-level resolution, so this matches the expected behaviour.
 - **There is a limit of 3 Cron Trigger schedules per Worker.** You can combine multiple expressions if needed (e.g. one every minute, one every hour).
-- **All sites run in parallel.** If one site is slow or unreachable, it does not delay the others. Each site has a 10-second timeout.
+- **All sites run in parallel.** If one site is slow or unreachable, it does not delay the others. Each site has a 25-second timeout.
 - **Cron Trigger history shows the last 100 runs.** For longer retention, enable [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/) in the dashboard.
-- **Direct HTTP requests return 403.** The Worker includes a `fetch` handler that returns `403 Forbidden` for any direct HTTP request to the Worker URL. This is intentional — the Worker only acts on scheduled cron triggers. Cloudflare requires a `fetch` handler to be present; without it, visiting the Worker URL would produce an internal runtime error instead of a clean response.
+- **Visiting the Worker URL directly returns a JSON status message.** The Worker's `fetch` handler responds with a plain JSON object confirming the Worker is active, and directs you to the `?kv=` dashboard endpoints. Cloudflare requires a `fetch` handler to be present on all Workers; without it, visiting the Worker URL would produce a runtime error instead of a clean response.
