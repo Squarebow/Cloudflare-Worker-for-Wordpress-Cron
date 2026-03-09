@@ -17,9 +17,9 @@ Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare W
 - [Hosting compatibility](#hosting-compatibility)
 - [How it works](#how-it-works)
 - [Setup](#setup)
-- [Securing wp-cron.php on your server](#securing-wp-cronphp-on-your-server)
-- [Testing](#testing)
 - [KV status tracking (optional)](#kv-status-tracking-optional)
+- [Testing](#testing)
+- [Securing wp-cron.php on your server](#securing-wp-cronphp-on-your-server)
 - [Troubleshooting](#troubleshooting)
 - [Notes and limitations](#notes-and-limitations)
 
@@ -162,6 +162,8 @@ Cloudflare's free tier allows **100,000 Worker requests per day** — you would 
 | **Secret** | Cloudflare stores and displays the value as masked. The Worker receives a raw string and parses it as JSON internally. |
 | **JSON** | Cloudflare parses the value automatically and passes a ready JavaScript array to the Worker. The value is visible in the Dashboard bindings panel. |
 
+> **The key value for each site must contain only standard ASCII characters** (letters A–Z, digits 0–9, and symbols such as !, @, #, $, _, -). Characters outside the ASCII range — such as accented letters, currency symbols (e.g. €), or emoji — will cause Cloudflare to UTF-8 encode the X-Worker-Auth header value, which can result in authentication failures on the WordPress side or a TypeError in strict Fetch implementations. 
+
 Both types are fully supported. **Secret is recommended** because your JSON contains authentication keys — masking them in the Dashboard reduces the risk of accidental exposure.
 
 > **Tip:** If you accidentally add the variable as the wrong type and the Worker logs a JSON parse error, simply delete the binding and re-add it with the correct type. No other changes are needed.
@@ -212,72 +214,6 @@ define( 'DISABLE_WP_CRON', true );
 ```
 
 This tells WordPress not to run its built-in scheduler on page loads. The Worker now takes over that responsibility entirely.
-
----
-
-## Securing wp-cron.php on your server
-
-Once `DISABLE_WP_CRON` is set, `wp-cron.php` only needs to respond to requests from this Worker. You should block all other access to it. The examples below use the `X-Worker-Auth` header as the gate.
-
-### Apache (2.4+)
-
-```apache
-<Files "wp-cron.php">
-    Require all denied
-    <RequireAny>
-        Require env worker_auth
-    </RequireAny>
-</Files>
-
-SetEnvIfNoCase X-Worker-Auth ".+" worker_auth
-```
-
-### Nginx
-
-```nginx
-location = /wp-cron.php {
-    if ($http_x_worker_auth = "") {
-        return 403;
-    }
-    # Continue to your normal PHP handler, e.g.:
-    include fastcgi_params;
-    fastcgi_pass php-handler;
-}
-```
-
-> **Tip:** For stronger protection, you can also verify the value of `X-Worker-Auth` matches the expected key, not just that the header is present. This can be done in a WordPress `mu-plugin` or at the server level.
-
----
-
-## Testing
-
-### Check the Worker runs at all
-
-Use [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare's CLI tool) to trigger the scheduled handler locally:
-
-```bash
-npx wrangler dev --test-scheduled
-# Then in another terminal:
-curl "http://localhost:8787/__scheduled"
-```
-
-### Check a specific site is reachable
-
-Open this URL in a browser (replacing the domain with your own):
-
-```
-https://your-site.com/wp-cron.php?doing_wp_cron
-```
-
-If WordPress is installed correctly you should get a blank or very short response with HTTP 200. A 404 means the file is missing or blocked.
-
-### View live Worker logs
-
-In the Cloudflare dashboard, go to your Worker → **Observability**. You will events, invocations, traces and visualizations. Under Worker → **Metrics** you will see aggregated data of deployments in selected time slots.
-
-### Check past runs
-
-Go to your Worker → **Trigger Events** → **View Events** to see a history of the last 100 invocations and their status.
 
 ---
 
@@ -351,6 +287,72 @@ Visiting these URLs in a browser renders a styled HTML dashboard. Accessing them
 
 ---
 
+## Testing
+
+### Check a specific site is reachable
+
+Open this URL in a browser (replacing the domain with your own):
+
+```
+https://your-site.com/wp-cron.php?doing_wp_cron
+```
+
+If WordPress is installed correctly you should get a blank or very short response with HTTP 200. A 404 means the file is missing or blocked.
+
+### View live Worker logs
+
+In the Cloudflare dashboard, go to your Worker → **Observability**. You will events, invocations, traces and visualizations. Under Worker → **Metrics** you will see aggregated data of deployments in selected time slots.
+
+### Check past runs
+
+Go to your Worker → **Trigger Events** → **View Events** to see a history of the last 100 invocations and their status.
+
+### Check the Worker runs at all
+
+ADVANCED: Developers may use [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare's CLI tool) to trigger the scheduled handler locally:
+
+```bash
+npx wrangler dev --test-scheduled
+# Then in another terminal:
+curl "http://localhost:8787/__scheduled"
+```
+
+---
+
+## Securing wp-cron.php on your server
+
+Once `DISABLE_WP_CRON` is set, `wp-cron.php` only needs to respond to requests from this Worker. You should block all other access to it. The examples below use the `X-Worker-Auth` header as the gate.
+
+### Apache (2.4+)
+
+```apache
+<Files "wp-cron.php">
+    Require all denied
+    <RequireAny>
+        Require env worker_auth
+    </RequireAny>
+</Files>
+
+SetEnvIfNoCase X-Worker-Auth ".+" worker_auth
+```
+
+### Nginx
+
+```nginx
+location = /wp-cron.php {
+    if ($http_x_worker_auth = "") {
+        return 403;
+    }
+    # Continue to your normal PHP handler, e.g.:
+    include fastcgi_params;
+    fastcgi_pass php-handler;
+}
+```
+
+> **Tip:** For stronger protection, you can also verify the value of `X-Worker-Auth` matches the expected key, not just that the header is present. This can be done in a WordPress `mu-plugin` or at the server level.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -374,3 +376,4 @@ Visiting these URLs in a browser renders a styled HTML dashboard. Accessing them
 - **All sites run in parallel.** If one site is slow or unreachable, it does not delay the others. Each site has a 25-second timeout.
 - **Cron Trigger history shows the last 100 runs.** For longer retention, enable [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/) in the dashboard.
 - **Visiting the Worker URL directly returns a JSON status message.** The Worker's `fetch` handler responds with a plain JSON object confirming the Worker is active, and directs you to the `?kv=` dashboard endpoints. Cloudflare requires a `fetch` handler to be present on all Workers; without it, visiting the Worker URL would produce a runtime error instead of a clean response.
+- **The key value for each site must contain only standard ASCII characters** (letters A–Z, digits 0–9, and symbols such as !, @, #, $, _, -). Characters outside the ASCII range — such as accented letters, currency symbols (e.g. €), or emoji — will cause Cloudflare to UTF-8 encode the X-Worker-Auth header value, which can result in authentication failures on the WordPress side or a TypeError in strict Fetch implementations. 
