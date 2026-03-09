@@ -227,6 +227,8 @@ you a lightweight audit trail without any external monitoring service. It works
 the same whether you have one site or many — each site gets its own entry in KV,
 keyed by hostname.
 
+![KV Status Tracking in Browser](docs/images/wp-cron-dashboard.gif)
+
 ### What gets stored
 
 For each site, two keys are maintained:
