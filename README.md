@@ -217,7 +217,9 @@ This tells WordPress not to run its built-in scheduler on page loads. The Worker
 
 ---
 
-## KV status tracking (optional but highly recommended)
+## KV status tracking
+
+# This step is optional but highly recommended
 
 The Worker can log the result of every cron run to a
 [Cloudflare KV namespace](https://developers.cloudflare.com/kv/). This gives
