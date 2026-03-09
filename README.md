@@ -17,7 +17,7 @@ Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare W
 - [Hosting compatibility](#hosting-compatibility)
 - [How it works](#how-it-works)
 - [Setup](#setup)
-- [KV status tracking (optional)](#kv-status-tracking-(optional))
+- [KV status tracking](#KV-status-tracking)
 - [Testing](#testing)
 - [Securing wp-cron.php on your server](#securing-wp-cronphp-on-your-server)
 - [Troubleshooting](#troubleshooting)
