@@ -227,8 +227,6 @@ you a lightweight audit trail without any external monitoring service. It works
 the same whether you have one site or many — each site gets its own entry in KV,
 keyed by hostname.
 
-![KV Status Tracking in Browser](docs/images/wp-cron-dashboard.gif)
-
 ### What gets stored
 
 For each site, two keys are maintained:
@@ -285,6 +283,8 @@ https://your-worker.workers.dev/?kv=history&site=example.com
 ```
 
 Visiting these URLs in a browser renders a styled HTML dashboard. Accessing them via `curl` or any API client returns raw JSON.
+
+![KV Status Tracking in Browser](docs/images/wp-cron-dashboard.gif)
 
 > **Note:** KV is fully optional. If the binding is not added, the Worker
 > operates exactly as before — no errors, no changed behaviour.
