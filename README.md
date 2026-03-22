@@ -16,6 +16,7 @@ Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare W
 - [Performance and server load](#performance-and-server-load)
 - [Hosting compatibility](#hosting-compatibility)
 - [How it works](#how-it-works)
+- [Cloudflare free tier usage](#Cloudflare-free-tier-usage)
 - [Setup](#setup)
 - [KV status tracking](#KV-status-tracking)
 - [Testing](#testing)
@@ -144,7 +145,7 @@ Cloudflare's free tier allows **100,000 Worker requests per day** — you would 
 ### Worker KV writes and the free tier
 
 The Cloudflare **Workers KV** free tier allows **1,000 KV write operations per day**. Every time the worker runs, it writes two keys per site to KV — one for the latest status (`status:<hostname>`) and one for the rolling history log
-(`history:<hostname>`). At a 1-minute cron trigger that adds up to 2,880 writes/day for a single site, which exceeds the free 1000 write operations limit. Remember,this is optional and only concerns monitoring.
+(`history:<hostname>`). At a 1-minute cron trigger that adds up to 2,880 writes/day for a single site, which exceeds the free 1000 write operations limit. Remember, this is optional and only concerns monitoring.
 
 To stay within quota, the worker uses a write throttle controlled by the `KV_WRITE_INTERVAL_MINUTES` constant (default: `5`). WP-Cron is still triggered on **every** cron execution — the throttle only affects how often results are
 saved to KV. At the default setting, KV is written once every 5 minutes, bringing daily writes down to around 576 for a single site. The status shown in the dashboard will be at most 5 minutes stale, which is perfectly acceptable for
