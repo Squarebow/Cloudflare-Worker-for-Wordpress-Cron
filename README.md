@@ -314,7 +314,7 @@ Visiting these URLs in a browser renders a styled HTML dashboard. Accessing them
 > **Note:** KV is fully optional. If the binding is not added, the Worker
 > operates exactly as before — no errors, no changed behaviour.
 
-Please see [Cloudflare free tier usage] (#Cloudflare-free-tier-usage) for Worker KV quotas.
+Please see [Cloudflare free tier usage](#Cloudflare-free-tier-usage) for Worker KV quotas.
 
 ---
 
