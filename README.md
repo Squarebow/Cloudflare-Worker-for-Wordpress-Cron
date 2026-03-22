@@ -1,5 +1,5 @@
-# Cloudflare Worker for WordPress Cron
-### Single-Site Version (switch branch to multi-site for multi-site version)
+# Cloudflare Worker for WordPress Cron - ARCHIVED
+### Single-Site Version (please switch to main branch for actively maintained universal version)
 
 Trigger `wp-cron.php` for one WordPress site reliably from Cloudflare's network, replacing WordPress's built-in scheduler. Switch between main and multi-site branch for the version that suits you best.
 
