@@ -1,5 +1,5 @@
 /*
-  Cloudflare Worker — WordPress Cron + KV Status Tracking v3.1.0
+  Cloudflare Worker — WordPress Cron + KV Status Tracking v3.0.0
   -------------------------------------------------------------------
   Triggers wp-cron.php for one or more WordPress sites on a fixed
   schedule, and writes the result of each run to a KV namespace for
@@ -24,12 +24,6 @@
     status:<hostname>     — latest run result (JSON)
     history:<hostname>    — last 10 run results (JSON array)
 
-  KV write throttling:
-    KV writes happen only every KV_WRITE_INTERVAL_MINUTES minutes to stay
-    within the Cloudflare free tier limit of 1,000 writes/day. WP-Cron
-    is still triggered every minute regardless. Dashboard data will be
-    at most KV_WRITE_INTERVAL_MINUTES minutes stale.
-
   To read KV from the browser, visit:
     https://your-worker.workers.dev/?kv=status          → all sites, latest run
     https://your-worker.workers.dev/?kv=history         → all sites, last 10 runs
@@ -46,15 +40,6 @@ const HISTORY_MAX_ENTRIES = 10;
 
 // KV TTL in seconds. Entries expire automatically after this period.
 const KV_TTL_SECONDS = 172_800; // 48 hours
-
-// How often (in minutes) to write status to KV.
-// At every-minute cron with 1 site:
-//   every 1 min  → 2,880 writes/day  ❌ exceeds free tier
-//   every 5 min  →   576 writes/day  ✓ safe
-//   every 10 min →   288 writes/day  ✓ very safe
-// Each additional site multiplies writes by 2 (status + history keys).
-// Adjust this value if you have many sites.
-const KV_WRITE_INTERVAL_MINUTES = 5;
 
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -125,18 +110,6 @@ function hostname(siteUrl) {
   } catch {
     return siteUrl;
   }
-}
-
-/**
- * Returns true if the current cron tick falls on a KV write interval.
- * Uses the scheduled timestamp so the check is deterministic and aligned
- * to wall-clock minute boundaries rather than execution time drift.
- *
- * Example: KV_WRITE_INTERVAL_MINUTES = 5 → writes at :00, :05, :10 … ✓
- */
-function shouldWriteKVThisTick(scheduledTime) {
-  const minuteOfDay = Math.floor(scheduledTime / 1000 / 60);
-  return (minuteOfDay % KV_WRITE_INTERVAL_MINUTES) === 0;
 }
 
 
@@ -251,20 +224,17 @@ async function triggerSite(site) {
 
 /**
  * Loop through all configured sites, trigger each one in parallel,
- * and write the result to KV (throttled to KV_WRITE_INTERVAL_MINUTES).
- *
- * WP-Cron is triggered on every execution regardless of the KV throttle.
+ * and write the result to KV.
  */
-async function handleScheduled(env, scheduledTime) {
+async function handleScheduled(env) {
   const sites = parseSites(env);
 
   const results = await Promise.allSettled(
     sites.map((site) => triggerSite(site))
   );
 
-  // Write results to KV only on throttled ticks to stay within free tier limits.
-  // KV_WRITE_INTERVAL_MINUTES controls the cadence (default: every 5 minutes).
-  if (env.WP_CRON_KV && shouldWriteKVThisTick(scheduledTime)) {
+  // Write results to KV if the binding is available
+  if (env.WP_CRON_KV) {
     await Promise.allSettled(
       results.map(async (settled) => {
         if (settled.status === "fulfilled") {
@@ -663,11 +633,9 @@ export default {
   /**
    * scheduled() — fired by Cloudflare Cron Trigger on your chosen schedule.
    * This is the primary, automated execution path.
-   * event.scheduledTime is passed through so the KV throttle gate can use
-   * it for deterministic, wall-clock-aligned write decisions.
    */
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(handleScheduled(env, event.scheduledTime));
+    ctx.waitUntil(handleScheduled(env));
   },
 
   /**
