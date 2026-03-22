@@ -5,7 +5,7 @@ Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare W
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-3.0.0-blue)
+![Version](https://img.shields.io/badge/Version-3.1.0-blue)
 
 ---
 
@@ -139,6 +139,30 @@ With `* * * * *` (every minute) and 3 sites configured:
 | Subrequests (site calls) | 4,320 |
 
 Cloudflare's free tier allows **100,000 Worker requests per day** — you would need to manage roughly 70 sites before approaching that limit. Adding more sites to your JSON array costs nothing extra in terms of free tier quota.
+
+
+### Worker KV writes and the free tier
+
+The Cloudflare **Workers KV** free tier allows **1,000 KV write operations per day**. Every time the worker runs, it writes two keys per site to KV — one for the latest status (`status:<hostname>`) and one for the rolling history log
+(`history:<hostname>`). At a 1-minute cron trigger that adds up to 2,880 writes/day for a single site, which exceeds the free 1000 write operations limit. Remember,this is optional and only concerns monitoring.
+
+To stay within quota, the worker uses a write throttle controlled by the `KV_WRITE_INTERVAL_MINUTES` constant (default: `5`). WP-Cron is still triggered on **every** cron execution — the throttle only affects how often results are
+saved to KV. At the default setting, KV is written once every 5 minutes, bringing daily writes down to around 576 for a single site. The status shown in the dashboard will be at most 5 minutes stale, which is perfectly acceptable for
+monitoring purposes.
+
+If you manage **multiple sites**, keep in mind that writes scale with site count: each throttled tick produces 2 writes × number of sites. A rough guide:
+
+| Sites | Interval | Writes/day |
+|-------|----------|------------|
+| 1     | 5 min    | ~576       |
+| 5     | 5 min    | ~2,880 ⚠️  |
+| 5     | 10 min   | ~1,440 ⚠️  |
+| 5     | 15 min   | ~960 ✓     |
+| 10    | 15 min   | ~1,920 ⚠️  |
+| 10    | 30 min   | ~960 ✓     |
+
+Adjust `KV_WRITE_INTERVAL_MINUTES` value at the top of `worker.js` to suit your setup. If you exceed the free tier frequently, upgrading to the Cloudflare Workers Paid plan ($5/month) raises the write limit to 1 million/day and removes this
+constraint entirely.
 
 ---
 

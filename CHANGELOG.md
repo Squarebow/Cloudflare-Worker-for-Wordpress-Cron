@@ -4,6 +4,15 @@ All notable changes to this project are recorded here.
 
 ---
 
+## [3.1.0] - 2026-03-22
+
+### Fixed
+- **KV write throttling to prevent free tier quota exhaustion** — the worker was writing two KV keys per site on every cron execution (one `status:` and one `history:` key), resulting in up to 2,880 writes/day with a single site
+  at the default 1-minute trigger — nearly three times the Cloudflare free tier limit of 1,000 writes/day. The root cause was that KV writes were tied to the cron trigger frequency rather than to dashboard view requests as originally
+  intended. Fixed by introducing a configurable throttle gate (`KV_WRITE_INTERVAL_MINUTES`, default `5`) that allows WP-Cron to keep firing every minute while limiting KV writes to once every 5 minutes (576 writes/day
+  for a single site). The gate uses `event.scheduledTime` for deterministic, wall-clock-aligned write decisions. Dashboard status data will be at most `KV_WRITE_INTERVAL_MINUTES` minutes stale, which has no practical impact on
+  monitoring. Users with multiple sites should consider increasing the interval further — each additional site adds 2 KV writes per throttled tick.
+
 ## [3.0.0] — 2026-03-05
 
 ### Consolidation
