@@ -5,7 +5,7 @@ Trigger `wp-cron.php` for one or more WordPress sites from a single Cloudflare W
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-Cron-21759B?logo=wordpress&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-3.1.0-blue)
+![Version](https://img.shields.io/badge/Version-3.1.1-blue)
 
 ---
 
@@ -311,6 +311,21 @@ Visiting these URLs in a browser renders a styled HTML dashboard. Accessing them
 
 ![KV Status Tracking in Browser](docs/images/wp-cron-dashboard.gif)
 
+### Protecting the dashboard (optional)
+
+By default anyone who knows the Worker's address can open the dashboard and see your site list and run results (never the keys). To lock it, add one more variable:
+
+1. Worker → **Settings** → **Variables and Secrets** → **+Add**, type **Secret**, name `DASHBOARD_KEY`, value: a long random string (ASCII only).
+2. Deploy.
+
+From then on the dashboard only opens with the key in the address; the Current Status / Run History links keep it for you:
+
+```
+https://your-worker.workers.dev/?kv=status&key=YOUR_DASHBOARD_KEY
+```
+
+Without the key (or with a wrong one) the Worker answers `401`. The plain status message at the bare Worker address stays public; it shows nothing about your sites. WP-Cron itself is not affected.
+
 > **Note:** KV is fully optional. If the binding is not added, the Worker
 > operates exactly as before — no errors, no changed behaviour.
 
@@ -332,11 +347,11 @@ If WordPress is installed correctly you should get a blank or very short respons
 
 ### View live Worker logs
 
-In the Cloudflare dashboard, go to your Worker → **Observability**. You will events, invocations, traces and visualizations. Under Worker → **Metrics** you will see aggregated data of deployments in selected time slots.
+In the Cloudflare dashboard, go to your Worker → **Observability**. You will see events, invocations, traces and visualizations. Every site that fails is logged there as an error (`wp-cron failed for https://…: HTTP 403`), so you can filter for failures without opening KV. Under Worker → **Metrics** you will see aggregated data of deployments in selected time slots.
 
 ### Check past runs
 
-Go to your Worker → **Trigger Events** → **View Events** to see a history of the last 100 invocations and their status.
+Go to your Worker → **Trigger Events** → **View Events** to see a history of the last 100 invocations and their status. A run that can't start at all (for example `WP_CRON_SITES` missing or not valid JSON) shows as failed there. A single site failing does not fail the run; it is logged and recorded in KV.
 
 ### Check the Worker runs at all
 
@@ -352,9 +367,13 @@ curl "http://localhost:8787/__scheduled"
 
 ## Securing wp-cron.php on your server
 
-Once `DISABLE_WP_CRON` is set, `wp-cron.php` only needs to respond to requests from this Worker. You should block all other access to it. The examples below use the `X-Worker-Auth` header as the gate.
+Once `DISABLE_WP_CRON` is set, `wp-cron.php` only needs to respond to requests from this Worker. You should block all other access to it.
 
-### Apache (2.4+)
+There are two levels. The server rules below only check that the `X-Worker-Auth` header **is present**: they stop casual visitors and bots, but anyone who sends the header with any value gets through. To check the **value** against your key, add the WordPress mu-plugin further down. Use both, or just the mu-plugin.
+
+### Server level: header present
+
+#### Apache (2.4+)
 
 ```apache
 <Files "wp-cron.php">
@@ -367,7 +386,7 @@ Once `DISABLE_WP_CRON` is set, `wp-cron.php` only needs to respond to requests f
 SetEnvIfNoCase X-Worker-Auth ".+" worker_auth
 ```
 
-### Nginx
+#### Nginx
 
 ```nginx
 location = /wp-cron.php {
@@ -380,7 +399,36 @@ location = /wp-cron.php {
 }
 ```
 
-> **Tip:** For stronger protection, you can also verify the value of `X-Worker-Auth` matches the expected key, not just that the header is present. This can be done in a WordPress `mu-plugin` or at the server level.
+### WordPress level: the key must match (recommended)
+
+1. In `wp-config.php`, next to `DISABLE_WP_CRON`, add the same key you put in `WP_CRON_SITES` for this site:
+
+   ```php
+   define( 'WORKER_CRON_KEY', 'a-strong-secret' );
+   ```
+
+2. Create `wp-content/mu-plugins/worker-cron-auth.php` (make the `mu-plugins` folder if it doesn't exist):
+
+   ```php
+   <?php
+   /**
+    * Plugin Name: Worker Cron Auth
+    * Description: Lets wp-cron.php run only for requests carrying this site's Cloudflare Worker key.
+    */
+   if ( defined( 'DOING_CRON' ) && DOING_CRON
+       && ! ( defined( 'WP_CLI' ) && WP_CLI )
+       && defined( 'WORKER_CRON_KEY' ) && WORKER_CRON_KEY !== '' ) {
+       $given = isset( $_SERVER['HTTP_X_WORKER_AUTH'] ) ? (string) $_SERVER['HTTP_X_WORKER_AUTH'] : '';
+       if ( ! hash_equals( WORKER_CRON_KEY, $given ) ) {
+           status_header( 403 );
+           exit;
+       }
+   }
+   ```
+
+Requests to `wp-cron.php` with a missing or wrong key now get `403`; the Worker's requests run as before. WP-CLI (`wp cron event run`) is not affected. If `WORKER_CRON_KEY` is not defined, the plugin does nothing, so installing it before step 1 can't stop your cron.
+
+The Worker records a `403` as a failed run, so a mismatched key shows up straight away in the dashboard and the logs.
 
 ---
 
@@ -388,8 +436,9 @@ location = /wp-cron.php {
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Failed to parse WP_CRON_SITES: Unexpected token 'o', "[object Obj"... is not valid JSON` | `WP_CRON_SITES` was added as a **JSON** binding type instead of a **Secret** | Re-add the variable as type **Secret** with the raw JSON string as its value |
-| `WP_CRON_SITES` parse error in logs | Invalid JSON in the variable | Validate your JSON at [jsonlint.com](https://jsonlint.com) before saving |
+| `WP_CRON_SITES is not valid JSON.` in logs | Invalid JSON in the variable (both Secret and JSON types are supported) | Validate your JSON at [jsonlint.com](https://jsonlint.com) before saving |
+| HTTP 403 for every run after adding the mu-plugin | The key in `WORKER_CRON_KEY` doesn't match the one in `WP_CRON_SITES` | Copy the same value to both places; check for spaces |
+| Dashboard answers `401` | `DASHBOARD_KEY` is set | Add `&key=<your DASHBOARD_KEY>` to the address |
 | HTTP 403 for a site | Server is blocking the request | Check your `X-Worker-Auth` header rules on that server |
 | HTTP 404 for a site | `wp-cron.php` not found or blocked | Confirm the file exists and is not blocked by a firewall rule |
 | HTTP 5xx for a site | WordPress or PHP error | Check that site's WordPress error log |

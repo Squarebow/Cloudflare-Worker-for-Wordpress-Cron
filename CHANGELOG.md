@@ -4,6 +4,28 @@ All notable changes to this project are recorded here.
 
 ---
 
+## [3.1.1] — 2026-11-12
+
+A security and reliability patch. Existing deployments keep working without any change: no new required variables, bindings or trigger changes.
+
+### Fixed
+- **Dashboard could run injected script.** Values shown on the HTML dashboard — the `?site=` filter from the address, hostnames, error messages, timestamps — were inserted into the page unescaped, so a crafted link such as `?kv=status&site=<script>…` ran that script on the Worker's address. Everything shown is now escaped, and `?site=` must be a plain hostname (`400` otherwise).
+- **A run that couldn't start showed as successful.** The scheduled handler handed its work to `ctx.waitUntil()`, so a configuration error (e.g. `WP_CRON_SITES` missing or invalid) did not mark the invocation as failed in Trigger Events. The work is now awaited, so it does.
+- **User-Agent version** said `3.0` while the Worker was 3.1.0. It now comes from a single `VERSION` constant (`Cloudflare-Worker-WP-Cron/3.1.1`), which the status message at the Worker address also shows.
+
+### Added
+- **Optional dashboard key.** Set a `DASHBOARD_KEY` secret and the `?kv=` dashboard only opens with `&key=<value>` in the address (compared in constant time; `401` otherwise). Without it the dashboard stays public, as before.
+- **Failed sites are logged** to Workers Logs (`wp-cron failed for <site>: <reason>`), not only to KV.
+- Dashboard responses are sent with `no-store`, `nosniff`, `no-referrer` and `noindex`, so the pages aren't cached, indexed, or leak the key to other sites.
+
+### Documentation
+- **Securing wp-cron.php:** the Apache and Nginx examples only check that the `X-Worker-Auth` header is present, which anyone can send; this is now said plainly. Added a ready-to-use mu-plugin that checks the header's **value** against a `WORKER_CRON_KEY` constant (`hash_equals`), skips WP-CLI, and does nothing until the constant is defined.
+- New section *Protecting the dashboard*.
+- Troubleshooting: replaced the outdated JSON-binding row (fixed in 2.0.1) with the current error message, and added rows for a key mismatch and the dashboard `401`.
+- Testing: explains which failures show in Trigger Events and which only in logs and KV.
+
+---
+
 ## [3.1.0] - 2026-03-22
 
 ### Fixed

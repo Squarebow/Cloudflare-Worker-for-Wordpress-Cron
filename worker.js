@@ -1,5 +1,5 @@
 /*
-  Cloudflare Worker — WordPress Cron + KV Status Tracking v3.1.0
+  Cloudflare Worker — WordPress Cron + KV Status Tracking v3.1.1
   -------------------------------------------------------------------
   Triggers wp-cron.php for one or more WordPress sites on a fixed
   schedule, and writes the result of each run to a KV namespace for
@@ -20,6 +20,11 @@
                        { "url": "https://mysite.com", "key": "my-secret" }
                      ]
 
+  Optional:
+    DASHBOARD_KEY  — when set, the ?kv= dashboard only opens with
+                     &key=<the same value> in the address. Without it the
+                     dashboard stays public, as before.
+
   KV keys written per site (auto-expire after 48 hours):
     status:<hostname>     — latest run result (JSON)
     history:<hostname>    — last 10 run results (JSON array)
@@ -34,9 +39,13 @@
     https://your-worker.workers.dev/?kv=status          → all sites, latest run
     https://your-worker.workers.dev/?kv=history         → all sites, last 10 runs
     https://your-worker.workers.dev/?kv=status&site=site1.com  → one site only
+    (add &key=<DASHBOARD_KEY> to each when DASHBOARD_KEY is set)
 */
 
 // ─── Configuration ──────────────────────────────────────────────────────────
+
+// Worker version, also sent in the User-Agent header.
+const VERSION = "3.1.1";
 
 // Request timeout in milliseconds. Worker will abandon a site after this long.
 const REQUEST_TIMEOUT_MS = 25_000;
@@ -58,6 +67,43 @@ const KV_WRITE_INTERVAL_MINUTES = 5;
 
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Escape text for use inside HTML. Everything the dashboard shows comes from
+ * KV, the request address or error messages, so none of it is trusted.
+ */
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+/**
+ * Compare two strings in constant time, so the dashboard key can't be worked
+ * out from how long a wrong guess takes to be refused.
+ */
+function safeEqual(a, b) {
+  const enc = new TextEncoder();
+  const x = enc.encode(String(a));
+  const y = enc.encode(String(b));
+  if (x.byteLength !== y.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(x, y);
+}
+
+// A hostname as used in the KV keys: letters, digits, dots and hyphens.
+const HOSTNAME_PATTERN = /^[a-z0-9.-]{1,253}$/i;
+
+/** JSON response with the dashboard's standard headers. */
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
 
 /**
  * Safely read the response body as text without throwing.
@@ -212,7 +258,7 @@ async function triggerSite(site) {
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const headers = { "User-Agent": "Cloudflare-Worker-WP-Cron/3.0" };
+    const headers = { "User-Agent": `Cloudflare-Worker-WP-Cron/${VERSION}` };
     if (site.key) headers["X-Worker-Auth"] = site.key;
 
     const response = await fetch(url, {
@@ -262,6 +308,15 @@ async function handleScheduled(env, scheduledTime) {
     sites.map((site) => triggerSite(site))
   );
 
+  // Failed sites go to the Worker logs (Observability), not only to KV.
+  for (const r of results) {
+    if (r.status === "fulfilled" && !r.value.success) {
+      console.error(`wp-cron failed for ${r.value.site}: ${r.value.error ?? "HTTP " + r.value.status}`);
+    } else if (r.status === "rejected") {
+      console.error(`wp-cron failed: ${r.reason?.message ?? r.reason}`);
+    }
+  }
+
   // Write results to KV only on throttled ticks to stay within free tier limits.
   // KV_WRITE_INTERVAL_MINUTES controls the cadence (default: every 5 minutes).
   if (env.WP_CRON_KV && shouldWriteKVThisTick(scheduledTime)) {
@@ -299,7 +354,7 @@ function renderCard(host, entry) {
     return `
       <div class="card unknown">
         <div class="card-header">
-          <span class="hostname">${host}</span>
+          <span class="hostname">${escapeHtml(host)}</span>
           <span class="badge badge-unknown">No data yet</span>
         </div>
         <p class="hint">Waiting for first cron run.</p>
@@ -316,16 +371,16 @@ function renderCard(host, entry) {
   return `
     <div class="card ${success ? "ok" : "fail"}">
       <div class="card-header">
-        <span class="hostname">${host}</span>
+        <span class="hostname">${escapeHtml(host)}</span>
         <span class="badge ${success ? "badge-ok" : "badge-fail"}">
           ${success ? "✓ OK" : "✗ Failed"}
         </span>
       </div>
       <div class="card-meta">
-        <span>HTTP ${statusCode}</span>
-        <span>${ts}</span>
+        <span>HTTP ${escapeHtml(statusCode)}</span>
+        <span>${escapeHtml(ts)}</span>
       </div>
-      ${error ? `<div class="card-error">${error}</div>` : ""}
+      ${error ? `<div class="card-error">${escapeHtml(error)}</div>` : ""}
     </div>`;
 }
 
@@ -344,16 +399,16 @@ function renderHistoryRow(entry, index) {
     <tr class="${success ? "" : "row-fail"}">
       <td>${index + 1}</td>
       <td><span class="badge ${success ? "badge-ok" : "badge-fail"}">${success ? "✓ OK" : "✗ Fail"}</span></td>
-      <td>${statusCode}</td>
-      <td>${ts}</td>
-      <td class="error-cell">${error}</td>
+      <td>${escapeHtml(statusCode)}</td>
+      <td>${escapeHtml(ts)}</td>
+      <td class="error-cell">${escapeHtml(error)}</td>
     </tr>`;
 }
 
 /**
  * Render the full HTML page for the dashboard.
  */
-function renderHTML(type, data) {
+function renderHTML(type, data, keyParam = "") {
   const now = new Date().toLocaleString("sl-SI", { timeZone: "Europe/Ljubljana" });
 
   let body = "";
@@ -367,14 +422,14 @@ function renderHTML(type, data) {
       if (!entries || entries.length === 0) {
         return `
           <div class="history-block">
-            <h2>${host}</h2>
+            <h2>${escapeHtml(host)}</h2>
             <p class="hint">No history yet.</p>
           </div>`;
       }
       const rows = entries.map((e, i) => renderHistoryRow(e, i)).join("\n");
       return `
         <div class="history-block">
-          <h2>${host}</h2>
+          <h2>${escapeHtml(host)}</h2>
           <table>
             <thead>
               <tr><th>#</th><th>Result</th><th>HTTP</th><th>Time</th><th>Error</th></tr>
@@ -390,6 +445,7 @@ function renderHTML(type, data) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
   <title>WP Cron Dashboard</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -590,8 +646,8 @@ function renderHTML(type, data) {
   </header>
 
   <nav>
-    <a href="?kv=status"  class="${type === "status"  ? "active" : ""}">Current Status</a>
-    <a href="?kv=history" class="${type === "history" ? "active" : ""}">Run History</a>
+    <a href="?kv=status${escapeHtml(keyParam)}"  class="${type === "status"  ? "active" : ""}">Current Status</a>
+    <a href="?kv=history${escapeHtml(keyParam)}" class="${type === "history" ? "active" : ""}">Run History</a>
   </nav>
 
   ${type === "status" ? `<div class="cards">${body}</div>` : body}
@@ -612,24 +668,28 @@ function renderHTML(type, data) {
  *   ?kv=history           → last 10 runs for all sites
  *   ?kv=status&site=x.com → latest run for one site only
  *   ?kv=history&site=x.com
+ *   &key=…                → required when DASHBOARD_KEY is set
  */
 async function handleDashboard(request, env, sites) {
   const url = new URL(request.url);
   const type = url.searchParams.get("kv");
   const siteFilter = url.searchParams.get("site");
+  const key = url.searchParams.get("key") ?? "";
+
+  if (env.DASHBOARD_KEY && !safeEqual(key, env.DASHBOARD_KEY)) {
+    return jsonResponse({ error: "This dashboard needs its key: add &key=<DASHBOARD_KEY> to the address." }, 401);
+  }
 
   if (!["status", "history"].includes(type)) {
-    return new Response(
-      JSON.stringify({ error: 'Use ?kv=status or ?kv=history' }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ error: "Use ?kv=status or ?kv=history" }, 400);
+  }
+
+  if (siteFilter !== null && !HOSTNAME_PATTERN.test(siteFilter)) {
+    return jsonResponse({ error: "site must be a hostname, e.g. example.com" }, 400);
   }
 
   if (!env.WP_CRON_KV) {
-    return new Response(
-      JSON.stringify({ error: "KV binding WP_CRON_KV is not configured." }),
-      { status: 503, headers: { "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ error: "KV binding WP_CRON_KV is not configured." }, 503);
   }
 
   let data;
@@ -643,16 +703,19 @@ async function handleDashboard(request, env, sites) {
 
   // Return HTML for browsers, JSON for everything else
   if (isBrowser(request)) {
-    return new Response(renderHTML(type, data), {
+    const keyParam = env.DASHBOARD_KEY ? `&key=${encodeURIComponent(key)}` : "";
+    return new Response(renderHTML(type, data, keyParam), {
       status: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+      },
     });
   }
 
-  return new Response(JSON.stringify(data, null, 2), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  return jsonResponse(data);
 }
 
 
@@ -665,9 +728,11 @@ export default {
    * This is the primary, automated execution path.
    * event.scheduledTime is passed through so the KV throttle gate can use
    * it for deterministic, wall-clock-aligned write decisions.
+   * Awaited rather than handed to waitUntil, so a run that can't start at
+   * all (e.g. WP_CRON_SITES missing) shows as failed in Trigger Events.
    */
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(handleScheduled(env, event.scheduledTime));
+    await handleScheduled(env, event.scheduledTime);
   },
 
   /**
@@ -689,14 +754,12 @@ export default {
     }
 
     // Default: plain status page
-    return new Response(
-      JSON.stringify({
-        worker: "CF WP Cron",
-        status: "active",
-        tip: "Add ?kv=status or ?kv=history to read KV data.",
-        time: new Date().toISOString(),
-      }, null, 2),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    return jsonResponse({
+      worker: "CF WP Cron",
+      version: VERSION,
+      status: "active",
+      tip: "Add ?kv=status or ?kv=history to read KV data.",
+      time: new Date().toISOString(),
+    });
   },
 };
